@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# IDE/OS
+.DS_Store
+.idea/
+.vscode/
+
+# Env
+.env
+.env.local
+
+# Alembic
+backend/alembic/versions/__pycache__/

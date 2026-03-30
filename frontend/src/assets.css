@@ -1,0 +1,19 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 210 20% 98%;
+  --foreground: 220 18% 12%;
+  --primary: 199 89% 48%;
+  --primary-foreground: 210 40% 98%;
+  --border: 214 20% 86%;
+  --input: 214 20% 86%;
+  --ring: 199 89% 48%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "IBM Plex Sans", "Noto Sans SC", sans-serif;
+}

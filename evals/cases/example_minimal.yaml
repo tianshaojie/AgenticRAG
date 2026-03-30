@@ -1,0 +1,7 @@
+id: case-001
+name: insufficient-evidence-abstain
+query: "What is the warranty policy for product X?"
+expected:
+  mode: abstain
+  min_citations: 0
+  notes: "No indexed evidence should trigger abstain fallback."
