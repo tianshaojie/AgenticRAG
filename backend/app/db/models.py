@@ -28,6 +28,10 @@ from app.db.base import Base
 from app.domain.enums import DocumentStatus, EvalRunStatus, MessageRole, StepStatus, TraceStatus
 
 
+def _enum_values(enum_cls) -> list[str]:
+    return [member.value for member in enum_cls]
+
+
 class Document(Base):
     __tablename__ = "documents"
 
@@ -37,7 +41,7 @@ class Document(Base):
     source_uri: Mapped[str] = mapped_column(String(2048), nullable=False)
     mime_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
     status: Mapped[DocumentStatus] = mapped_column(
-        Enum(DocumentStatus, name="document_status"),
+        Enum(DocumentStatus, name="document_status", values_callable=_enum_values),
         nullable=False,
         default=DocumentStatus.RECEIVED,
         server_default=DocumentStatus.RECEIVED.value,
@@ -70,6 +74,7 @@ class DocumentVersion(Base):
     )
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    content_text: Mapped[str] = mapped_column(Text, nullable=False)
     content_uri: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     meta: Mapped[dict[str, Any]] = mapped_column(
@@ -183,7 +188,10 @@ class ChatMessage(Base):
         nullable=False,
         index=True,
     )
-    role: Mapped[MessageRole] = mapped_column(Enum(MessageRole, name="message_role"), nullable=False)
+    role: Mapped[MessageRole] = mapped_column(
+        Enum(MessageRole, name="message_role", values_callable=_enum_values),
+        nullable=False,
+    )
     content: Mapped[str] = mapped_column(Text, nullable=False)
     abstained: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     citations: Mapped[list[dict[str, Any]]] = mapped_column(
@@ -218,7 +226,9 @@ class AgentTrace(Base):
     )
     query_text: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[TraceStatus] = mapped_column(
-        Enum(TraceStatus, name="trace_status"), nullable=False, default=TraceStatus.RUNNING
+        Enum(TraceStatus, name="trace_status", values_callable=_enum_values),
+        nullable=False,
+        default=TraceStatus.RUNNING,
     )
     start_state: Mapped[str] = mapped_column(String(64), nullable=False)
     end_state: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -252,7 +262,9 @@ class AgentTraceStep(Base):
     state: Mapped[str] = mapped_column(String(64), nullable=False)
     action: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[StepStatus] = mapped_column(
-        Enum(StepStatus, name="step_status"), nullable=False, default=StepStatus.PENDING
+        Enum(StepStatus, name="step_status", values_callable=_enum_values),
+        nullable=False,
+        default=StepStatus.PENDING,
     )
     input_payload: Mapped[dict[str, Any]] = mapped_column(
         JSONB,
@@ -310,7 +322,7 @@ class EvalRun(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(256), nullable=False)
     status: Mapped[EvalRunStatus] = mapped_column(
-        Enum(EvalRunStatus, name="eval_run_status"),
+        Enum(EvalRunStatus, name="eval_run_status", values_callable=_enum_values),
         nullable=False,
         default=EvalRunStatus.QUEUED,
         server_default=EvalRunStatus.QUEUED.value,

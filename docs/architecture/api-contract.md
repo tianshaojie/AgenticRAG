@@ -1,31 +1,74 @@
-# API Contract Skeleton (Step 1)
+# API Contract (Step 4)
 
-基于 FastAPI OpenAPI 自动生成。当前仅定义契约与占位返回。
+Base URL: `http://localhost:8000`
 
-## Routes
+## 1. POST /documents
 
-1. `POST /documents`
-2. `GET /documents`
-3. `POST /documents/{id}/index`
-4. `POST /chat/query`
-5. `GET /chat/{id}/trace`
-6. `GET /health`
-7. `GET /ready`
-8. `POST /evals/run`
-9. `GET /evals/{id}`
+`multipart/form-data`
 
-## Contract Notes
+- `title` (string, required)
+- `file` (UploadFile, required, txt/md)
+- `metadata_json` (stringified JSON object, optional)
 
-- `POST /chat/query` 当前默认返回 `abstained=true`
-- citation 结构已固定：`chunk_id/document_id/quote/score`
-- trace endpoint 返回有限状态步骤骨架
-- eval endpoint 返回 run 受理与读取骨架
+Response: `DocumentRead`
 
-## OpenAPI 生成
+## 2. GET /documents
 
-后端启动后访问：
+Query params:
 
-- `/openapi.json`
-- `/docs`
+- `limit` (default 50)
+- `offset` (default 0)
 
-可用于前端类型同步与契约测试。
+Response: `DocumentListResponse`
+
+## 3. POST /documents/{id}/index
+
+JSON body:
+
+- `embedding_model`
+- `chunk_size`
+- `chunk_overlap`
+
+Response: `DocumentIndexResponse`
+
+## 4. POST /chat/query
+
+JSON body:
+
+- `session_id` (optional)
+- `query`
+- `top_k`
+- `score_threshold`
+- `embedding_model`
+
+Response: `ChatQueryResponse`
+
+- always includes `citations`
+- citations include `document_id`, `chunk_id`, and `span`
+- no-evidence returns `abstained=true`
+
+## 5. GET /chat/{id}/trace
+
+Path param:
+
+- `id` = `session_id`
+
+Response: `TraceRead`
+
+- returns latest trace for the chat session
+- includes ordered `steps` with per-step summary, latency, fallback, and errors
+
+## 6. GET /health
+
+Response: `HealthResponse`
+
+## 7. GET /ready
+
+Response: `ReadyResponse`
+
+- includes database and pgvector checks
+
+## OpenAPI
+
+- `GET /openapi.json`
+- `GET /docs`

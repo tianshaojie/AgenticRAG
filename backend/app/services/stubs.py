@@ -13,6 +13,8 @@ class PassthroughCitationAssembler(CitationAssembler):
                     document_id=item.chunk.document_id,
                     quote=item.chunk.content[:280],
                     score=item.score,
+                    start_char=item.chunk.start_char,
+                    end_char=item.chunk.end_char,
                 )
             )
         return citations

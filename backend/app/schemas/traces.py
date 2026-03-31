@@ -12,6 +12,9 @@ class TraceStepRead(BaseModel):
     status: str
     input_payload: dict[str, Any]
     output_payload: dict[str, Any]
+    input_summary: str | None = None
+    output_summary: str | None = None
+    fallback: bool = False
     latency_ms: int | None = None
     error_message: str | None = None
     created_at: datetime

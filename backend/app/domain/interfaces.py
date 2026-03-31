@@ -9,8 +9,11 @@ from uuid import UUID
 class ChunkRecord:
     chunk_id: UUID
     document_id: UUID
+    document_version_id: UUID
     content: str
     chunk_index: int
+    start_char: int
+    end_char: int
     metadata: dict[str, Any]
 
 
@@ -18,6 +21,7 @@ class ChunkRecord:
 class ScoredChunk:
     chunk: ChunkRecord
     score: float
+    distance: float
 
 
 @dataclass(slots=True)
@@ -26,6 +30,8 @@ class CitationRecord:
     document_id: UUID
     quote: str
     score: float
+    start_char: int
+    end_char: int
 
 
 @dataclass(slots=True)
@@ -38,21 +44,34 @@ class GeneratedAnswer:
 
 class DocumentIngestor(Protocol):
     async def ingest(self, *, document_id: UUID) -> None:
-        """Load source, persist normalized document payload, and enqueue chunking."""
+        """Load source and persist normalized document payload."""
 
 
 class Chunker(Protocol):
-    def chunk(self, *, text: str, metadata: dict[str, Any] | None = None) -> list[ChunkRecord]:
+    def chunk(
+        self,
+        *,
+        text: str,
+        document_id: UUID,
+        document_version_id: UUID,
+        metadata: dict[str, Any] | None = None,
+    ) -> list[ChunkRecord]:
         """Split text into deterministic chunks."""
 
 
 class Embedder(Protocol):
-    async def embed(self, *, inputs: list[str], model: str) -> list[list[float]]:
+    async def embed(
+        self,
+        *,
+        inputs: list[str],
+        model: str,
+        timeout_seconds: int | None = None,
+    ) -> list[list[float]]:
         """Generate embeddings with timeout/retry guards."""
 
 
 class VectorIndex(Protocol):
-    async def upsert(self, *, vectors: list[tuple[UUID, list[float], dict[str, Any]]]) -> None:
+    async def upsert(self, *, vectors: list[tuple[UUID, list[float], dict[str, Any]]], model: str) -> None:
         """Persist vectors for chunk ids."""
 
     async def search(
@@ -60,13 +79,22 @@ class VectorIndex(Protocol):
         *,
         query_vector: list[float],
         top_k: int,
+        score_threshold: float,
+        model: str,
         filters: dict[str, Any] | None = None,
     ) -> list[ScoredChunk]:
         """Return top-k scored chunks from pgvector index."""
 
 
 class Retriever(Protocol):
-    async def retrieve(self, *, query: str, top_k: int) -> list[ScoredChunk]:
+    async def retrieve(
+        self,
+        *,
+        query: str,
+        top_k: int,
+        score_threshold: float,
+        model: str,
+    ) -> list[ScoredChunk]:
         """Retrieve candidate chunks via vector index and metadata filters."""
 
 
@@ -88,6 +116,16 @@ class AnswerGenerator(Protocol):
 class AgentPolicy(Protocol):
     def next_state(self, *, current_state: str, context: dict[str, Any]) -> str:
         """Finite-state transition policy for retrieval/synthesis flow."""
+
+
+class QueryRewriteStrategy(Protocol):
+    def rewrite(self, *, query: str, attempt: int, reason: str) -> str:
+        """Rewrite query in bounded deterministic attempts."""
+
+
+class EvidenceSufficiencyJudge(Protocol):
+    def judge(self, *, query: str, candidates: list[ScoredChunk]) -> dict[str, Any]:
+        """Judge evidence sufficiency and conflict for policy decisions."""
 
 
 class EvaluationRunner(Protocol):

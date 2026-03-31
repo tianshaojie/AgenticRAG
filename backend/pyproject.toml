@@ -12,6 +12,7 @@ dependencies = [
   "uvicorn[standard]>=0.30.0",
   "pydantic>=2.8.0",
   "pydantic-settings>=2.4.0",
+  "python-multipart>=0.0.9",
   "sqlalchemy>=2.0.32",
   "psycopg[binary]>=3.2.1",
   "alembic>=1.13.2",
@@ -35,6 +36,9 @@ include = ["app*"]
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = [
+  "integration: tests requiring PostgreSQL + pgvector",
+]
 
 [tool.ruff]
 line-length = 100

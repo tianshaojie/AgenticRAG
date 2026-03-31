@@ -3,12 +3,12 @@ SHELL := /bin/zsh
 BACKEND_DIR := backend
 FRONTEND_DIR := frontend
 
-.PHONY: backend-install frontend-install install backend-dev frontend-dev dev backend-test frontend-test test lint format alembic-upgrade alembic-revision
+.PHONY: backend-install frontend-install install backend-dev frontend-dev dev backend-test frontend-test test integration-test smoke-test lint format alembic-upgrade alembic-revision
 
 install: backend-install frontend-install
 
 backend-install:
-	cd $(BACKEND_DIR) && python3 -m venv .venv && source .venv/bin/activate && pip install -e .[dev]
+	cd $(BACKEND_DIR) && python3 -m venv .venv && source .venv/bin/activate && pip install -e '.[dev]'
 
 frontend-install:
 	cd $(FRONTEND_DIR) && npm install
@@ -29,6 +29,12 @@ frontend-test:
 	cd $(FRONTEND_DIR) && npm run test
 
 test: backend-test frontend-test
+
+integration-test:
+	cd $(BACKEND_DIR) && source .venv/bin/activate && pytest -q tests -m integration
+
+smoke-test:
+	cd $(BACKEND_DIR) && source .venv/bin/activate && pytest -q tests/test_smoke.py
 
 lint:
 	cd $(BACKEND_DIR) && source .venv/bin/activate && ruff check .

@@ -2,32 +2,48 @@ import { http } from '../lib/http';
 import type {
   ChatQueryRequest,
   ChatQueryResponse,
-  DocumentCreateRequest,
   DocumentIndexRequest,
   DocumentIndexResponse,
   DocumentListResponse,
   DocumentRead,
-  EvalResultRead,
-  EvalRunRequest,
-  EvalRunResponse,
   HealthResponse,
   ReadyResponse,
   TraceRead,
   UUID,
 } from './contracts';
 
+export interface DocumentUploadPayload {
+  title: string;
+  file: File;
+  metadata?: Record<string, unknown>;
+}
+
 export const apiClient = {
-  createDocument: async (payload: DocumentCreateRequest): Promise<DocumentRead> => {
-    const { data } = await http.post<DocumentRead>('/documents', payload);
+  uploadDocument: async (payload: DocumentUploadPayload): Promise<DocumentRead> => {
+    const form = new FormData();
+    form.append('title', payload.title);
+    form.append('file', payload.file);
+
+    if (payload.metadata && Object.keys(payload.metadata).length > 0) {
+      form.append('metadata_json', JSON.stringify(payload.metadata));
+    }
+
+    const { data } = await http.post<DocumentRead>('/documents', form, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
     return data;
   },
 
-  listDocuments: async (): Promise<DocumentListResponse> => {
-    const { data } = await http.get<DocumentListResponse>('/documents');
+  listDocuments: async (params?: { limit?: number; offset?: number }): Promise<DocumentListResponse> => {
+    const { data } = await http.get<DocumentListResponse>('/documents', {
+      params,
+    });
     return data;
   },
 
-  indexDocument: async (id: UUID, payload: DocumentIndexRequest): Promise<DocumentIndexResponse> => {
+  indexDocument: async (id: UUID, payload: DocumentIndexRequest = {}): Promise<DocumentIndexResponse> => {
     const { data } = await http.post<DocumentIndexResponse>(`/documents/${id}/index`, payload);
     return data;
   },
@@ -49,16 +65,6 @@ export const apiClient = {
 
   ready: async (): Promise<ReadyResponse> => {
     const { data } = await http.get<ReadyResponse>('/ready');
-    return data;
-  },
-
-  runEval: async (payload: EvalRunRequest): Promise<EvalRunResponse> => {
-    const { data } = await http.post<EvalRunResponse>('/evals/run', payload);
-    return data;
-  },
-
-  getEval: async (id: UUID): Promise<EvalResultRead> => {
-    const { data } = await http.get<EvalResultRead>(`/evals/${id}`);
     return data;
   },
 };

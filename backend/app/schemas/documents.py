@@ -7,13 +7,6 @@ from pydantic import BaseModel, Field
 from app.domain.enums import DocumentStatus
 
 
-class DocumentCreateRequest(BaseModel):
-    title: str = Field(min_length=1, max_length=512)
-    source_uri: str = Field(min_length=1, max_length=2048)
-    mime_type: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
 class DocumentRead(BaseModel):
     id: UUID
     title: str
@@ -22,6 +15,7 @@ class DocumentRead(BaseModel):
     status: DocumentStatus
     metadata: dict[str, Any]
     created_at: datetime
+    updated_at: datetime
 
 
 class DocumentListResponse(BaseModel):
@@ -30,12 +24,13 @@ class DocumentListResponse(BaseModel):
 
 
 class DocumentIndexRequest(BaseModel):
-    embedding_model: str = Field(default="stub-embedding-model")
+    embedding_model: str = Field(default="deterministic-local-v1")
     chunk_size: int = Field(default=512, ge=64, le=4096)
-    chunk_overlap: int = Field(default=64, ge=0, le=512)
+    chunk_overlap: int = Field(default=64, ge=0, le=1024)
 
 
 class DocumentIndexResponse(BaseModel):
     document_id: UUID
     status: str
-    accepted: bool
+    chunk_count: int
+    vector_count: int
