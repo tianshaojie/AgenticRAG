@@ -7,6 +7,7 @@ vi.mock('../src/lib/http', () => ({
   http: {
     post: vi.fn(),
     get: vi.fn(),
+    put: vi.fn(),
   },
 }));
 
@@ -66,5 +67,63 @@ describe('apiClient', () => {
       top_k: 5,
       score_threshold: 0.2,
     });
+  });
+
+  it('calls eval run endpoint with stable payload', async () => {
+    vi.mocked(http.post).mockResolvedValueOnce({
+      data: {
+        eval_run_id: '55555555-5555-5555-5555-555555555555',
+        status: 'succeeded',
+        accepted: true,
+        summary: {
+          gate_passed: true,
+        },
+      },
+    } as never);
+
+    await apiClient.runEval({
+      dataset: 'golden_v1',
+      name: 'frontend-test-eval',
+      config: {},
+    });
+
+    expect(http.post).toHaveBeenCalledWith('/evals/run', {
+      dataset: 'golden_v1',
+      name: 'frontend-test-eval',
+      config: {},
+    });
+  });
+
+  it('updates provider settings with explicit payload', async () => {
+    vi.mocked(http.put).mockResolvedValueOnce({
+      data: {
+        llm: { name: 'llm', provider: 'openai_compatible', enabled: true, has_api_key: true, timeout_seconds: 15, max_retries: 2 },
+        reranker: { name: 'reranker', provider: 'http', enabled: true, has_api_key: true, timeout_seconds: 8, max_retries: 2 },
+        note: 'runtime only',
+      },
+    } as never);
+
+    await apiClient.updateProviderSettings({
+      llm_api_key: 'sk-test',
+      enable_real_llm_provider: true,
+    });
+
+    expect(http.put).toHaveBeenCalledWith('/settings/providers', {
+      llm_api_key: 'sk-test',
+      enable_real_llm_provider: true,
+    });
+  });
+
+  it('checks provider connectivity with stable endpoint', async () => {
+    vi.mocked(http.post).mockResolvedValueOnce({
+      data: {
+        status: 'ok',
+        checks: [],
+      },
+    } as never);
+
+    await apiClient.checkProviderConnectivity({ target: 'all' });
+
+    expect(http.post).toHaveBeenCalledWith('/settings/providers/check', { target: 'all' });
   });
 });

@@ -15,6 +15,7 @@ def test_document_and_version_persisted(db_session) -> None:
         content_bytes=b"# Title\\nhello",
         metadata={"source": "test"},
         request_id="req-test",
+        trace_id="trace-test",
     )
 
     assert doc.id is not None

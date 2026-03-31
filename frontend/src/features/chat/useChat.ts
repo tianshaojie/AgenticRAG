@@ -2,13 +2,7 @@ import { ref } from 'vue';
 
 import { apiClient } from '../../api/client';
 import type { ChatQueryResponse, TraceRead, UUID } from '../../api/contracts';
-
-function normalizeError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return 'Unknown error';
-}
+import { parseApiError } from '../../lib/http';
 
 export function useChat() {
   const response = ref<ChatQueryResponse | null>(null);
@@ -33,8 +27,7 @@ export function useChat() {
       trace.value = null;
       traceError.value = null;
     } catch (err) {
-      error.value = normalizeError(err);
-      throw err;
+      error.value = parseApiError(err);
     } finally {
       loading.value = false;
     }
@@ -47,8 +40,7 @@ export function useChat() {
     try {
       trace.value = await apiClient.getChatTrace(sessionId);
     } catch (err) {
-      traceError.value = normalizeError(err);
-      throw err;
+      traceError.value = parseApiError(err);
     } finally {
       traceLoading.value = false;
     }

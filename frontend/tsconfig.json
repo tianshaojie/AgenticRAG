@@ -10,7 +10,7 @@
     "esModuleInterop": true,
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
     "skipLibCheck": true,
-    "types": ["vitest/globals"]
+    "types": ["vite/client", "vitest/globals"]
   },
   "include": ["src", "tests", "vite.config.ts"],
   "references": [{ "path": "./tsconfig.node.json" }]

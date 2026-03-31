@@ -1,0 +1,66 @@
+{
+  "dataset": "golden_v1",
+  "description": "Step 6 baseline golden dataset for retrieval, citation, abstain, and agent regression checks.",
+  "documents": [
+    {
+      "key": "credit_policy",
+      "title": "Credit Account Policy",
+      "content": "信用账户可以用于融资买入和融券卖出，需遵守担保品与风险控制规则。"
+    },
+    {
+      "key": "eligibility_rule",
+      "title": "Eligibility Rule",
+      "content": "开通信用账户前，用户需要完成风险测评并满足适当性要求。"
+    }
+  ],
+  "cases": [
+    {
+      "name": "credit_usage_retrieval",
+      "question": "融资买入和融券卖出",
+      "expected_document_keys": ["credit_policy"],
+      "expected_chunk_indices": [0],
+      "expected_abstain": false,
+      "citation_constraints": {
+        "min_count": 1,
+        "require_resolved_chunk": true
+      },
+      "tags": ["retrieval", "finance", "single_hop"],
+      "difficulty": "easy",
+      "scenario_type": "single_hop",
+      "top_k": 5,
+      "score_threshold": 0.95
+    },
+    {
+      "name": "eligibility_requirement",
+      "question": "风险测评",
+      "expected_document_keys": ["eligibility_rule"],
+      "expected_chunk_indices": [0],
+      "expected_abstain": false,
+      "citation_constraints": {
+        "min_count": 1,
+        "require_resolved_chunk": true
+      },
+      "tags": ["retrieval", "eligibility"],
+      "difficulty": "easy",
+      "scenario_type": "single_hop",
+      "top_k": 5,
+      "score_threshold": 0.95
+    },
+    {
+      "name": "unknown_abstain",
+      "question": "火星基地几点开门",
+      "expected_document_keys": [],
+      "expected_chunk_indices": [],
+      "expected_abstain": true,
+      "citation_constraints": {
+        "min_count": 0,
+        "require_resolved_chunk": true
+      },
+      "tags": ["abstain", "out_of_scope"],
+      "difficulty": "easy",
+      "scenario_type": "abstain",
+      "top_k": 5,
+      "score_threshold": 0.99
+    }
+  ]
+}

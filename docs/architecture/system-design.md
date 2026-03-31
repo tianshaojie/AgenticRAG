@@ -34,6 +34,8 @@
 - `agent/`: 有限状态机
 - `evals/`: 评估执行接口
 - `observability/`: 结构化日志与请求元数据中间件
+- `llm/`: LLM provider 抽象与 OpenAI-compatible 适配层
+- `reranker/`: Reranker provider 抽象与 HTTP 适配层
 
 ### Frontend (`frontend/src`)
 

@@ -23,6 +23,7 @@ async def test_pgvector_topk_retrieval(db_session) -> None:
         content_bytes=b"warranty period is 12 months for product x",
         metadata={},
         request_id="req-1",
+        trace_id="trace-1",
     )
 
     chunker = SlidingWindowChunker(chunk_size=128, chunk_overlap=16)
@@ -33,6 +34,7 @@ async def test_pgvector_topk_retrieval(db_session) -> None:
         chunker=chunker,
         embedder=embedder,
         vector_index=vector_index,
+        settings=settings,
     )
 
     await indexing.index_document(
@@ -73,6 +75,7 @@ async def test_retrieval_uses_lexical_fallback_when_vector_empty(db_session) -> 
         content_bytes="信用账户用于融资融券交易".encode("utf-8"),
         metadata={},
         request_id="req-cn-1",
+        trace_id="trace-cn-1",
     )
 
     chunker = SlidingWindowChunker(chunk_size=128, chunk_overlap=16)
@@ -83,6 +86,7 @@ async def test_retrieval_uses_lexical_fallback_when_vector_empty(db_session) -> 
         chunker=chunker,
         embedder=embedder,
         vector_index=vector_index,
+        settings=settings,
     )
 
     await indexing.index_document(

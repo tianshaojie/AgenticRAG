@@ -11,6 +11,11 @@ from app.agent.state_machine import AgentState, validate_transition
         (AgentState.ANALYZE_QUERY, {"need_retrieval": True}, AgentState.RETRIEVE),
         (AgentState.ANALYZE_QUERY, {"need_retrieval": False}, AgentState.ABSTAIN),
         (AgentState.RETRIEVE, {"retrieval_failed": False}, AgentState.EVALUATE_EVIDENCE),
+        (
+            AgentState.RETRIEVE,
+            {"retrieval_fallback_to_abstain": True},
+            AgentState.ABSTAIN,
+        ),
         (AgentState.EVALUATE_EVIDENCE, {"evidence_sufficient": True}, AgentState.RERANK),
         (
             AgentState.EVALUATE_EVIDENCE,

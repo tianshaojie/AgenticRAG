@@ -1,5 +1,7 @@
 # Quality Acceptance Criteria (Step 1)
 
+> For current production hardening acceptance, also see `docs/quality/release-acceptance.md`.
+
 ## 1. 结构与边界
 
 - [x] 目录结构符合阶段要求

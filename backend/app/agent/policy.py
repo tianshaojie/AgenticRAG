@@ -17,6 +17,8 @@ class DefaultAgentPolicy(AgentPolicy):
             return AgentState.ABSTAIN.value
 
         if state == AgentState.RETRIEVE:
+            if bool(context.get("retrieval_fallback_to_abstain", False)):
+                return AgentState.ABSTAIN.value
             if bool(context.get("retrieval_failed", False)):
                 return AgentState.FAILED.value
             return AgentState.EVALUATE_EVIDENCE.value

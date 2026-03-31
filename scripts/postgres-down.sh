@@ -2,4 +2,5 @@
 set -euo pipefail
 
 docker rm -f agenticrag-pg >/dev/null 2>&1 || true
-echo "agenticrag-pg stopped"
+docker rm -f rag_db >/dev/null 2>&1 || true
+echo "PostgreSQL containers stopped (agenticrag-pg, rag_db if present)"

@@ -11,5 +11,11 @@ describe('frontend scaffold', () => {
     expect(typeof apiClient.getChatTrace).toBe('function');
     expect(typeof apiClient.health).toBe('function');
     expect(typeof apiClient.ready).toBe('function');
+    expect(typeof apiClient.getProviderSettings).toBe('function');
+    expect(typeof apiClient.updateProviderSettings).toBe('function');
+    expect(typeof apiClient.checkProviderConnectivity).toBe('function');
+    expect(typeof apiClient.runEval).toBe('function');
+    expect(typeof apiClient.getEvalResult).toBe('function');
+    expect(typeof apiClient.getLatestEvalResult).toBe('function');
   });
 });

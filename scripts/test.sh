@@ -2,3 +2,4 @@
 set -euo pipefail
 
 make test
+make smoke

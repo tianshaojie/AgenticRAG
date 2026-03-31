@@ -4,6 +4,8 @@ import { RouterLink } from 'vue-router';
 const items = [
   { label: 'Documents', to: '/documents' },
   { label: 'Chat', to: '/chat' },
+  { label: 'Traces', to: '/traces' },
+  { label: 'Evals', to: '/evals' },
   { label: 'Settings / Health', to: '/settings' },
 ];
 </script>

@@ -28,11 +28,13 @@ class HealthResponse(BaseModel):
     status: Literal["ok", "degraded", "failed"]
     service: str
     timestamp: datetime
+    checks: list[HealthCheck] = Field(default_factory=list)
 
 
 class ReadyResponse(BaseModel):
     status: Literal["ok", "degraded", "failed"]
     checks: list[HealthCheck]
+    summary: dict[str, str] = Field(default_factory=dict)
 
 
 class RequestMetadata(BaseModel):

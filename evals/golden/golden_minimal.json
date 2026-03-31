@@ -1,0 +1,29 @@
+{
+  "dataset": "golden_minimal",
+  "description": "Minimal golden set for local smoke regression.",
+  "documents": [
+    {
+      "key": "credit_policy",
+      "title": "Credit Policy",
+      "content": "信用账户可用于融资买入与融券卖出。"
+    }
+  ],
+  "cases": [
+    {
+      "name": "credit_usage_hit",
+      "question": "融资买入和融券卖出",
+      "expected_document_keys": ["credit_policy"],
+      "expected_chunk_indices": [0],
+      "expected_abstain": false,
+      "citation_constraints": {
+        "min_count": 1,
+        "require_resolved_chunk": true
+      },
+      "tags": ["smoke", "retrieval"],
+      "difficulty": "easy",
+      "scenario_type": "single_hop",
+      "top_k": 5,
+      "score_threshold": 0.95
+    }
+  ]
+}

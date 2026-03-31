@@ -47,6 +47,7 @@ class SimpleDocumentIngestionService:
         content_bytes: bytes,
         metadata: dict[str, Any],
         request_id: str,
+        trace_id: str,
     ) -> Document:
         if not self._is_supported(filename, mime_type):
             raise UnsupportedDocumentError("Only txt/markdown uploads are supported")
@@ -79,7 +80,14 @@ class SimpleDocumentIngestionService:
 
         self._logger.info(
             "document_ingested",
-            extra={"request_id": request_id, "document_id": str(document.id), "size_bytes": len(content_bytes)},
+            extra={
+                "request_id": request_id,
+                "trace_id": trace_id,
+                "document_id": str(document.id),
+                "provider_name": "upload",
+                "fallback_used": False,
+                "size_bytes": len(content_bytes),
+            },
         )
         return document
 

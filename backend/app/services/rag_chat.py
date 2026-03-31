@@ -11,6 +11,7 @@ from app.agent.executor import FiniteStateAgentExecutor
 from app.db.models import AgentTrace, ChatMessage, ChatSession
 from app.domain.enums import MessageRole
 from app.domain.interfaces import GeneratedAnswer, ScoredChunk
+from app.observability.metrics import metrics
 
 
 class RAGChatService:
@@ -100,9 +101,13 @@ class RAGChatService:
             extra={
                 "request_id": request_id,
                 "trace_id": str(execution.trace_db_id),
+                "query_id": str(user_message.id),
                 "session_id": str(session.id),
                 "retrieved_count": len(execution.ranked_chunks),
                 "abstained": execution.answer.abstained,
+                "fallback_used": bool(trace.meta.get("fallback_used")) if trace else False,
             },
         )
+        metrics.record_abstain(abstained=execution.answer.abstained)
+        metrics.record_fallback(used=bool(trace.meta.get("fallback_used")) if trace else False)
         return session, assistant_message, execution.ranked_chunks, execution.answer, execution.trace_db_id

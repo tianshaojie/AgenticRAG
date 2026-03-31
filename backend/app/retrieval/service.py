@@ -29,7 +29,7 @@ class PgVectorRetriever(Retriever):
             await self._embedder.embed(
                 inputs=[query],
                 model=model,
-                timeout_seconds=self._settings.request_timeout_seconds,
+                timeout_seconds=self._settings.embedding_timeout_seconds,
             )
         )[0]
 

@@ -99,7 +99,15 @@ class Retriever(Protocol):
 
 
 class Reranker(Protocol):
-    async def rerank(self, *, query: str, candidates: list[ScoredChunk], top_n: int) -> list[ScoredChunk]:
+    async def rerank(
+        self,
+        *,
+        query: str,
+        candidates: list[ScoredChunk],
+        top_n: int,
+        request_id: str = "unknown",
+        trace_id: str = "unknown",
+    ) -> list[ScoredChunk]:
         """Rerank candidates in second-stage ranking layer."""
 
 
@@ -109,7 +117,14 @@ class CitationAssembler(Protocol):
 
 
 class AnswerGenerator(Protocol):
-    async def generate(self, *, query: str, citations: list[CitationRecord]) -> GeneratedAnswer:
+    async def generate(
+        self,
+        *,
+        query: str,
+        citations: list[CitationRecord],
+        request_id: str = "unknown",
+        trace_id: str = "unknown",
+    ) -> GeneratedAnswer:
         """Generate answer from cited context or abstain when evidence is insufficient."""
 
 

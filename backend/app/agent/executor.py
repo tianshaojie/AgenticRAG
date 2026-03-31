@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from dataclasses import dataclass
@@ -14,6 +15,8 @@ from app.agent.policy import DefaultAgentPolicy
 from app.agent.rewrite import DefaultQueryRewriteStrategy
 from app.agent.state_machine import AgentState, TERMINAL_STATES
 from app.core.config import Settings
+from app.core.errors import AppError
+from app.core.resilience import ResiliencePolicy, call_with_resilience
 from app.db.models import AgentTrace, AgentTraceStep
 from app.domain.enums import StepStatus, TraceStatus
 from app.domain.interfaces import (
@@ -42,6 +45,7 @@ class _RuntimeContext:
     fallback_used: bool = False
     failure_reason: str | None = None
     abstain_reason: str | None = None
+    retrieve_fallback_to_abstain: bool = False
 
 
 class FiniteStateAgentExecutor:
@@ -66,6 +70,7 @@ class FiniteStateAgentExecutor:
         self._answer_generator = answer_generator
         self._policy = policy or DefaultAgentPolicy()
         self._rewrite_strategy = rewrite_strategy or DefaultQueryRewriteStrategy()
+        self._logger = logging.getLogger("app.agent")
         self._evidence_judge = evidence_judge or DefaultEvidenceSufficiencyJudge(
             min_results=settings.agent_min_evidence_results,
             min_score=settings.evidence_min_score,
@@ -76,6 +81,8 @@ class FiniteStateAgentExecutor:
         self,
         *,
         trace_id,
+        request_id: str,
+        query_id: str,
         step_order: int,
         state: AgentState,
         action: str,
@@ -103,6 +110,20 @@ class FiniteStateAgentExecutor:
         self._db.add(row)
         self._db.flush()
 
+        fallback_used = bool(output_payload.get("fallback", False))
+        self._logger.info(
+            "agent_step_recorded",
+            extra={
+                "request_id": request_id,
+                "trace_id": str(trace_id),
+                "query_id": query_id,
+                "agent_state": state.value,
+                "latency_ms": latency_ms,
+                "fallback_used": fallback_used,
+                "operation": action,
+            },
+        )
+
         return AgentStepModel(
             step_order=step_order,
             state=state,
@@ -111,7 +132,7 @@ class FiniteStateAgentExecutor:
             input_summary=input_summary,
             output_summary=output_summary,
             latency_ms=latency_ms,
-            fallback=bool(output_payload.get("fallback", False)),
+            fallback=fallback_used,
             error_message=error_message,
         )
 
@@ -143,6 +164,7 @@ class FiniteStateAgentExecutor:
         )
         self._db.add(trace_row)
         self._db.flush()
+        query_id = str(trace_row.id)
 
         runtime = _RuntimeContext(
             original_query=query,
@@ -150,6 +172,24 @@ class FiniteStateAgentExecutor:
             top_k=top_k,
             score_threshold=score_threshold,
             embedding_model=embedding_model,
+        )
+        retrieval_policy = ResiliencePolicy(
+            timeout_seconds=float(self._settings.retrieval_timeout_seconds),
+            max_retries=self._settings.retrieval_retry_attempts,
+            backoff_base_ms=self._settings.provider_backoff_base_ms,
+            backoff_max_ms=self._settings.provider_backoff_max_ms,
+        )
+        rerank_policy = ResiliencePolicy(
+            timeout_seconds=float(self._settings.rerank_timeout_seconds),
+            max_retries=self._settings.rerank_retry_attempts,
+            backoff_base_ms=self._settings.provider_backoff_base_ms,
+            backoff_max_ms=self._settings.provider_backoff_max_ms,
+        )
+        generation_policy = ResiliencePolicy(
+            timeout_seconds=float(self._settings.generation_timeout_seconds),
+            max_retries=self._settings.generation_retry_attempts,
+            backoff_base_ms=self._settings.provider_backoff_base_ms,
+            backoff_max_ms=self._settings.provider_backoff_max_ms,
         )
 
         state = AgentState.INIT
@@ -164,6 +204,8 @@ class FiniteStateAgentExecutor:
                 steps.append(
                     self._record_step(
                         trace_id=trace_row.id,
+                        request_id=request_id,
+                        query_id=query_id,
                         step_order=step_order,
                         state=state,
                         action="guard:max_steps",
@@ -215,24 +257,50 @@ class FiniteStateAgentExecutor:
                         "top_k": runtime.top_k,
                         "score_threshold": runtime.score_threshold,
                     }
-                    runtime.candidates = await self._retriever.retrieve(
-                        query=runtime.current_query,
-                        top_k=runtime.top_k,
-                        score_threshold=runtime.score_threshold,
-                        model=runtime.embedding_model,
-                    )
-                    fallback_used = any(
-                        item.chunk.metadata.get("retrieval_source") == "lexical_fallback"
-                        for item in runtime.candidates
-                    )
-                    runtime.fallback_used = runtime.fallback_used or fallback_used
-                    top_score = max((item.score for item in runtime.candidates), default=0.0)
-                    output_summary = f"retrieved={len(runtime.candidates)} top_score={top_score:.3f}"
-                    output_payload = {
-                        "retrieved_count": len(runtime.candidates),
-                        "top_score": top_score,
-                        "fallback": fallback_used,
-                    }
+                    runtime.retrieve_fallback_to_abstain = False
+                    try:
+                        runtime.candidates = await call_with_resilience(
+                            operation="retrieval",
+                            provider_name=type(self._retriever).__name__,
+                            policy=retrieval_policy,
+                            call=lambda: self._retriever.retrieve(
+                                query=runtime.current_query,
+                                top_k=runtime.top_k,
+                                score_threshold=runtime.score_threshold,
+                                model=runtime.embedding_model,
+                            ),
+                            logger=self._logger,
+                            request_id=request_id,
+                            trace_id=trace_id,
+                            query_id=query_id,
+                            agent_state=state.value,
+                        )
+                        fallback_used = any(
+                            item.chunk.metadata.get("retrieval_source") == "lexical_fallback"
+                            for item in runtime.candidates
+                        )
+                        runtime.fallback_used = runtime.fallback_used or fallback_used
+                        top_score = max((item.score for item in runtime.candidates), default=0.0)
+                        output_summary = f"retrieved={len(runtime.candidates)} top_score={top_score:.3f}"
+                        output_payload = {
+                            "retrieved_count": len(runtime.candidates),
+                            "top_score": top_score,
+                            "fallback": fallback_used,
+                        }
+                    except AppError as exc:
+                        runtime.candidates = []
+                        runtime.fallback_used = True
+                        runtime.retrieve_fallback_to_abstain = True
+                        runtime.abstain_reason = "retrieval_failure_fallback"
+                        output_summary = "retrieval_failed_fallback_to_abstain"
+                        output_payload = {
+                            "retrieved_count": 0,
+                            "top_score": 0.0,
+                            "fallback": True,
+                            "fallback_stage": "retrieval",
+                            "fallback_reason": runtime.abstain_reason,
+                            "error_code": exc.code,
+                        }
 
                 elif state == AgentState.EVALUATE_EVIDENCE:
                     action = "evaluate_evidence"
@@ -285,40 +353,95 @@ class FiniteStateAgentExecutor:
                     candidates = runtime.candidates or []
                     input_summary = f"candidates={len(candidates)}"
                     input_payload = {"candidate_count": len(candidates)}
-                    runtime.reranked = await self._reranker.rerank(
-                        query=runtime.current_query,
-                        candidates=candidates,
-                        top_n=min(self._settings.agent_rerank_top_n, max(len(candidates), 1)),
-                    )
-                    output_summary = f"reranked={len(runtime.reranked)}"
-                    output_payload = {
-                        "reranked_count": len(runtime.reranked),
-                        "fallback": runtime.fallback_used,
-                    }
+                    try:
+                        runtime.reranked = await call_with_resilience(
+                            operation="rerank",
+                            provider_name=type(self._reranker).__name__,
+                            policy=rerank_policy,
+                            call=lambda: self._reranker.rerank(
+                                query=runtime.current_query,
+                                candidates=candidates,
+                                top_n=min(self._settings.agent_rerank_top_n, max(len(candidates), 1)),
+                                request_id=request_id,
+                                trace_id=trace_id,
+                            ),
+                            logger=self._logger,
+                            request_id=request_id,
+                            trace_id=trace_id,
+                            query_id=query_id,
+                            agent_state=state.value,
+                        )
+                        output_summary = f"reranked={len(runtime.reranked)}"
+                        output_payload = {
+                            "reranked_count": len(runtime.reranked),
+                            "fallback": runtime.fallback_used,
+                        }
+                    except AppError as exc:
+                        runtime.fallback_used = True
+                        runtime.reranked = candidates
+                        output_summary = "rerank_failed_fallback_to_candidates"
+                        output_payload = {
+                            "reranked_count": len(runtime.reranked),
+                            "fallback": True,
+                            "fallback_stage": "rerank",
+                            "fallback_reason": "rerank_failure_fallback",
+                            "error_code": exc.code,
+                        }
 
                 elif state == AgentState.GENERATE_ANSWER:
                     action = "generate_answer"
                     ranked = runtime.reranked if runtime.reranked else (runtime.candidates or [])
                     citations = self._citation_assembler.assemble(ranked_chunks=ranked)
-                    answer = await self._answer_generator.generate(
-                        query=runtime.current_query,
-                        citations=citations,
-                    )
-                    if runtime.assessment and runtime.assessment.conflict and not answer.abstained:
-                        answer = GeneratedAnswer(
-                            text=(
-                                "Evidence appears to be partially conflicting; answer may be uncertain.\n"
-                                f"{answer.text}"
+                    try:
+                        answer = await call_with_resilience(
+                            operation="generation",
+                            provider_name=type(self._answer_generator).__name__,
+                            policy=generation_policy,
+                            call=lambda: self._answer_generator.generate(
+                                query=runtime.current_query,
+                                citations=citations,
+                                request_id=request_id,
+                                trace_id=trace_id,
                             ),
-                            citations=answer.citations,
-                            abstained=False,
-                            reason="evidence_conflict",
+                            logger=self._logger,
+                            request_id=request_id,
+                            trace_id=trace_id,
+                            query_id=query_id,
+                            agent_state=state.value,
                         )
-                    runtime.answer = answer
+                        if runtime.assessment and runtime.assessment.conflict and not answer.abstained:
+                            answer = GeneratedAnswer(
+                                text=(
+                                    "Evidence appears to be partially conflicting; answer may be uncertain.\n"
+                                    f"{answer.text}"
+                                ),
+                                citations=answer.citations,
+                                abstained=False,
+                                reason="evidence_conflict",
+                            )
+                        runtime.answer = answer
+                        output_payload = {"abstained": answer.abstained, "reason": answer.reason}
+                    except AppError as exc:
+                        runtime.fallback_used = True
+                        runtime.answer = GeneratedAnswer(
+                            text="Insufficient evidence to answer reliably.",
+                            citations=citations,
+                            abstained=True,
+                            reason="generation_failure_fallback",
+                        )
+                        output_payload = {
+                            "abstained": True,
+                            "reason": runtime.answer.reason,
+                            "fallback": True,
+                            "fallback_stage": "generation",
+                            "fallback_reason": "generation_failure_fallback",
+                            "error_code": exc.code,
+                        }
                     input_summary = f"citations={len(citations)}"
-                    output_summary = f"abstained={answer.abstained}, reason={answer.reason}"
+                    output_summary = (
+                        f"abstained={runtime.answer.abstained}, reason={runtime.answer.reason}"
+                    )
                     input_payload = {"citation_count": len(citations)}
-                    output_payload = {"abstained": answer.abstained, "reason": answer.reason}
 
                 elif state == AgentState.ABSTAIN:
                     action = "abstain"
@@ -364,6 +487,7 @@ class FiniteStateAgentExecutor:
                         current_state=state.value,
                         context={
                             "need_retrieval": runtime.need_retrieval,
+                            "retrieval_fallback_to_abstain": runtime.retrieve_fallback_to_abstain,
                             "retrieval_failed": runtime.failure_reason == "retrieval_error",
                             "evidence_sufficient": runtime.assessment.sufficient if runtime.assessment else False,
                             "can_rewrite": runtime.rewrite_count < self._settings.agent_max_rewrites,
@@ -381,6 +505,8 @@ class FiniteStateAgentExecutor:
                 steps.append(
                     self._record_step(
                         trace_id=trace_row.id,
+                        request_id=request_id,
+                        query_id=query_id,
                         step_order=step_order,
                         state=state,
                         action=action,
@@ -404,6 +530,8 @@ class FiniteStateAgentExecutor:
                 steps.append(
                     self._record_step(
                         trace_id=trace_row.id,
+                        request_id=request_id,
+                        query_id=query_id,
                         step_order=step_order,
                         state=state,
                         action=action or "execute",

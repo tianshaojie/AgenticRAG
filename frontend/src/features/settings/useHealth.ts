@@ -2,13 +2,7 @@ import { ref } from 'vue';
 
 import { apiClient } from '../../api/client';
 import type { HealthResponse, ReadyResponse } from '../../api/contracts';
-
-function normalizeError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return 'Unknown error';
-}
+import { parseApiError } from '../../lib/http';
 
 export function useHealth() {
   const health = ref<HealthResponse | null>(null);
@@ -25,7 +19,7 @@ export function useHealth() {
       health.value = healthValue;
       ready.value = readyValue;
     } catch (err) {
-      error.value = normalizeError(err);
+      error.value = parseApiError(err);
     } finally {
       loading.value = false;
     }

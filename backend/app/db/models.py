@@ -301,7 +301,33 @@ class EvalCase(Base):
         default=list,
         server_default=text("'[]'::jsonb"),
     )
+    expected_document_keys: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+    )
+    expected_chunk_indices: Mapped[list[int]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+    )
+    expected_abstain: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
+    citation_constraints: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
     tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
+    difficulty: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    scenario_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     meta: Mapped[dict[str, Any]] = mapped_column(
         "metadata",
         JSONB,
@@ -390,3 +416,4 @@ Index("ix_documents_status", Document.status)
 Index("ix_document_chunks_document_id_chunk_index", DocumentChunk.document_id, DocumentChunk.chunk_index)
 Index("ix_agent_trace_steps_trace_order", AgentTraceStep.trace_id, AgentTraceStep.step_order)
 Index("ix_chat_messages_session_created", ChatMessage.session_id, ChatMessage.created_at)
+Index("ix_eval_cases_dataset_name", EvalCase.dataset, EvalCase.name)

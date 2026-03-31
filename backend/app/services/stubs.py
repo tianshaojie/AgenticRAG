@@ -21,7 +21,15 @@ class PassthroughCitationAssembler(CitationAssembler):
 
 
 class ConservativeAnswerGenerator(AnswerGenerator):
-    async def generate(self, *, query: str, citations: list[CitationRecord]) -> GeneratedAnswer:
+    async def generate(
+        self,
+        *,
+        query: str,
+        citations: list[CitationRecord],
+        request_id: str = "unknown",
+        trace_id: str = "unknown",
+    ) -> GeneratedAnswer:
+        _ = request_id, trace_id
         _ = query
         if not citations:
             return GeneratedAnswer(

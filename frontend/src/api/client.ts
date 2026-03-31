@@ -6,7 +6,14 @@ import type {
   DocumentIndexResponse,
   DocumentListResponse,
   DocumentRead,
+  EvalResultRead,
+  EvalRunRequest,
+  EvalRunResponse,
   HealthResponse,
+  ProviderCheckRequest,
+  ProviderCheckResponse,
+  ProviderSettingsResponse,
+  ProviderSettingsUpdateRequest,
   ReadyResponse,
   TraceRead,
   UUID,
@@ -65,6 +72,40 @@ export const apiClient = {
 
   ready: async (): Promise<ReadyResponse> => {
     const { data } = await http.get<ReadyResponse>('/ready');
+    return data;
+  },
+
+  getProviderSettings: async (): Promise<ProviderSettingsResponse> => {
+    const { data } = await http.get<ProviderSettingsResponse>('/settings/providers');
+    return data;
+  },
+
+  updateProviderSettings: async (
+    payload: ProviderSettingsUpdateRequest,
+  ): Promise<ProviderSettingsResponse> => {
+    const { data } = await http.put<ProviderSettingsResponse>('/settings/providers', payload);
+    return data;
+  },
+
+  checkProviderConnectivity: async (
+    payload: ProviderCheckRequest = { target: 'all' },
+  ): Promise<ProviderCheckResponse> => {
+    const { data } = await http.post<ProviderCheckResponse>('/settings/providers/check', payload);
+    return data;
+  },
+
+  runEval: async (payload: EvalRunRequest): Promise<EvalRunResponse> => {
+    const { data } = await http.post<EvalRunResponse>('/evals/run', payload);
+    return data;
+  },
+
+  getEvalResult: async (id: UUID): Promise<EvalResultRead> => {
+    const { data } = await http.get<EvalResultRead>(`/evals/${id}`);
+    return data;
+  },
+
+  getLatestEvalResult: async (): Promise<EvalResultRead> => {
+    const { data } = await http.get<EvalResultRead>('/evals/latest');
     return data;
   },
 };

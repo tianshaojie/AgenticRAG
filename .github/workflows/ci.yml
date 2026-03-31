@@ -1,0 +1,66 @@
+name: CI Gate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    services:
+      pgvector:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: agentic_rag_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d agentic_rag_ci"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    env:
+      RAG_DATABASE_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/agentic_rag_ci
+      RAG_TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/agentic_rag_ci
+      RAG_EVAL_DEFAULT_DATASET: golden_v1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Backend
+        run: make backend-install
+
+      - name: Install Frontend
+        run: make frontend-install
+
+      - name: Apply Migrations
+        run: |
+          cd backend
+          source .venv/bin/activate
+          alembic upgrade head
+
+      - name: Lint Gate
+        run: make lint
+
+      - name: Test Gate
+        run: make test
+
+      - name: Eval Gate
+        run: make eval
+
+      - name: Smoke Gate
+        run: make smoke

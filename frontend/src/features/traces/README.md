@@ -1,3 +1,4 @@
 # traces feature
 
-Reserved for finite-state trace timeline components.
+Contains the `useTrace` composable for loading `/chat/{session_id}/trace`
+and powering timeline visualization on the trace page and chat page.

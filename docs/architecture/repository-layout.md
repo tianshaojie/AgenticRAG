@@ -1,4 +1,4 @@
-# Repository Layout (Step 1)
+# Repository Layout
 
 ```text
 backend/
@@ -39,6 +39,8 @@ docs/
   quality/
 
 evals/
+  demo_documents/
+  golden/
   cases/
   reports/
 

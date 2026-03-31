@@ -11,7 +11,29 @@ class JsonLogFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
         }
-        for key in ("request_id", "trace_id", "path", "method", "status_code", "duration_ms"):
+        for key in (
+            "request_id",
+            "trace_id",
+            "query_id",
+            "document_id",
+            "path",
+            "method",
+            "status_code",
+            "status",
+            "duration_ms",
+            "latency_ms",
+            "agent_state",
+            "provider_name",
+            "operation",
+            "attempt",
+            "fallback_used",
+            "error_code",
+            "error_category",
+            "abstained",
+            "retrieved_count",
+            "chunk_count",
+            "vector_count",
+        ):
             if hasattr(record, key):
                 payload[key] = getattr(record, key)
         return json.dumps(payload, ensure_ascii=True)

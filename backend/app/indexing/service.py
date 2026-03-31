@@ -5,6 +5,8 @@ import logging
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
+from app.core.config import Settings
+from app.core.resilience import ResiliencePolicy, call_with_resilience
 from app.db.models import Document, DocumentChunk, DocumentVersion
 from app.domain.enums import DocumentStatus
 from app.domain.interfaces import Chunker, Embedder, VectorIndex
@@ -18,11 +20,13 @@ class DocumentIndexingService:
         chunker: Chunker,
         embedder: Embedder,
         vector_index: VectorIndex,
+        settings: Settings,
     ) -> None:
         self._db = db
         self._chunker = chunker
         self._embedder = embedder
         self._vector_index = vector_index
+        self._settings = settings
         self._logger = logging.getLogger("app.indexing")
 
     async def index_document(
@@ -32,7 +36,9 @@ class DocumentIndexingService:
         embedding_model: str,
         request_id: str,
         timeout_seconds: int,
+        trace_id: str | None = None,
     ) -> tuple[int, int]:
+        trace_value = trace_id or request_id
         document = self._db.get(Document, document_id)
         if document is None:
             raise ValueError("document_not_found")
@@ -79,25 +85,55 @@ class DocumentIndexingService:
 
         self._db.flush()
 
-        vectors = await self._embedder.embed(
-            inputs=[c.content for c in chunks],
-            model=embedding_model,
-            timeout_seconds=timeout_seconds,
+        embed_policy = ResiliencePolicy(
+            timeout_seconds=float(timeout_seconds),
+            max_retries=self._settings.embedding_retry_attempts,
+            backoff_base_ms=self._settings.provider_backoff_base_ms,
+            backoff_max_ms=self._settings.provider_backoff_max_ms,
+        )
+        vectors = await call_with_resilience(
+            operation="embedding",
+            provider_name=type(self._embedder).__name__,
+            policy=embed_policy,
+            call=lambda: self._embedder.embed(
+                inputs=[c.content for c in chunks],
+                model=embedding_model,
+                timeout_seconds=timeout_seconds,
+            ),
+            logger=self._logger,
+            request_id=request_id,
+            trace_id=trace_value,
+            document_id=str(document_id),
         )
 
-        await self._vector_index.upsert(
-            vectors=[
-                (
-                    chunk.chunk_id,
-                    vector,
-                    {
-                        "document_id": str(chunk.document_id),
-                        "chunk_index": chunk.chunk_index,
-                    },
-                )
-                for chunk, vector in zip(chunks, vectors, strict=True)
-            ],
-            model=embedding_model,
+        upsert_policy = ResiliencePolicy(
+            timeout_seconds=float(self._settings.retrieval_timeout_seconds),
+            max_retries=self._settings.retrieval_retry_attempts,
+            backoff_base_ms=self._settings.provider_backoff_base_ms,
+            backoff_max_ms=self._settings.provider_backoff_max_ms,
+        )
+        await call_with_resilience(
+            operation="vector_upsert",
+            provider_name=type(self._vector_index).__name__,
+            policy=upsert_policy,
+            call=lambda: self._vector_index.upsert(
+                vectors=[
+                    (
+                        chunk.chunk_id,
+                        vector,
+                        {
+                            "document_id": str(chunk.document_id),
+                            "chunk_index": chunk.chunk_index,
+                        },
+                    )
+                    for chunk, vector in zip(chunks, vectors, strict=True)
+                ],
+                model=embedding_model,
+            ),
+            logger=self._logger,
+            request_id=request_id,
+            trace_id=trace_value,
+            document_id=str(document_id),
         )
 
         document.status = DocumentStatus.INDEXED
@@ -107,9 +143,12 @@ class DocumentIndexingService:
             "document_indexed",
             extra={
                 "request_id": request_id,
+                "trace_id": trace_value,
                 "document_id": str(document_id),
                 "chunk_count": len(chunks),
                 "vector_count": len(vectors),
+                "provider_name": type(self._embedder).__name__,
+                "fallback_used": False,
             },
         )
         return len(chunks), len(vectors)

@@ -2,13 +2,7 @@ import { ref } from 'vue';
 
 import { apiClient, type DocumentUploadPayload } from '../../api/client';
 import type { DocumentRead, UUID } from '../../api/contracts';
-
-function normalizeError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return 'Unknown error';
-}
+import { parseApiError } from '../../lib/http';
 
 export function useDocuments() {
   const documents = ref<DocumentRead[]>([]);
@@ -17,6 +11,7 @@ export function useDocuments() {
   const uploading = ref(false);
   const error = ref<string | null>(null);
   const indexingMap = ref<Record<string, boolean>>({});
+  const indexErrors = ref<Record<string, string | null>>({});
 
   async function refresh() {
     loading.value = true;
@@ -26,8 +21,13 @@ export function useDocuments() {
       const response = await apiClient.listDocuments({ limit: 100, offset: 0 });
       documents.value = response.items;
       total.value = response.total;
+      const nextErrors: Record<string, string | null> = {};
+      for (const doc of response.items) {
+        nextErrors[doc.id] = indexErrors.value[doc.id] ?? null;
+      }
+      indexErrors.value = nextErrors;
     } catch (err) {
-      error.value = normalizeError(err);
+      error.value = parseApiError(err);
     } finally {
       loading.value = false;
     }
@@ -41,8 +41,7 @@ export function useDocuments() {
       await apiClient.uploadDocument(payload);
       await refresh();
     } catch (err) {
-      error.value = normalizeError(err);
-      throw err;
+      error.value = parseApiError(err);
     } finally {
       uploading.value = false;
     }
@@ -50,17 +49,22 @@ export function useDocuments() {
 
   async function indexDocument(id: UUID) {
     indexingMap.value[id] = true;
-    error.value = null;
+    indexErrors.value[id] = null;
 
     try {
       await apiClient.indexDocument(id, {});
       await refresh();
     } catch (err) {
-      error.value = normalizeError(err);
-      throw err;
+      const message = parseApiError(err);
+      indexErrors.value[id] = message;
+      error.value = message;
     } finally {
       indexingMap.value[id] = false;
     }
+  }
+
+  async function retryIndex(id: UUID) {
+    await indexDocument(id);
   }
 
   return {
@@ -70,8 +74,10 @@ export function useDocuments() {
     uploading,
     error,
     indexingMap,
+    indexErrors,
     refresh,
     upload,
     indexDocument,
+    retryIndex,
   };
 }

@@ -54,7 +54,8 @@ def integration_db_url() -> str:
             env=env,
             check=True,
         )
-        return direct_url
+        yield direct_url
+        return
 
     if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
         pytest.skip("docker not available for integration tests")

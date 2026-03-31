@@ -2,8 +2,8 @@
 import AgentTracePanel from '../components/AgentTracePanel.vue';
 import AnswerCard from '../components/AnswerCard.vue';
 import ChatInput from '../components/ChatInput.vue';
-import CitationList from '../components/CitationList.vue';
 import EmptyState from '../components/EmptyState.vue';
+import EvidenceCitationPanel from '../components/EvidenceCitationPanel.vue';
 import ErrorState from '../components/ErrorState.vue';
 import LoadingState from '../components/LoadingState.vue';
 import Button from '../components/ui/button/Button.vue';
@@ -21,6 +21,14 @@ async function onViewTrace() {
   }
   await loadTrace(response.value.session_id);
 }
+
+function onOpenTracePage() {
+  if (!response.value) {
+    return;
+  }
+  const query = encodeURIComponent(response.value.session_id);
+  window.location.assign(`/traces?session_id=${query}`);
+}
 </script>
 
 <template>
@@ -33,15 +41,26 @@ async function onViewTrace() {
     <ChatInput :loading="loading" @submit="onSubmit" />
 
     <ErrorState v-if="error" :message="error" />
-    <LoadingState v-if="loading" message="Querying backend..." />
+    <LoadingState v-if="loading" message="Retrieving evidence from indexed documents..." />
 
-    <template v-if="response">
-      <AnswerCard :response="response" />
-      <CitationList :citations="response.citations" />
+    <template v-if="loading || response">
+      <AnswerCard :loading="loading" :response="response" />
+      <EvidenceCitationPanel
+        v-if="response"
+        :citations="response.citations"
+        :retrieval-results="response.retrieval_results"
+      />
 
-      <div class="flex items-center gap-3">
+      <div v-if="response" class="flex flex-wrap items-center gap-3">
         <Button data-testid="view-trace-button" variant="outline" @click="onViewTrace">
           {{ traceLoading ? 'Loading Trace...' : 'View Agent Trace' }}
+        </Button>
+        <Button
+          data-testid="open-trace-page-button"
+          variant="outline"
+          @click="onOpenTracePage"
+        >
+          Open Trace Page
         </Button>
       </div>
 
