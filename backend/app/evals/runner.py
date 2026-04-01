@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -9,16 +10,16 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.agent.executor import FiniteStateAgentExecutor
 from app.agent.policy import DefaultAgentPolicy
 from app.agent.rewrite import DefaultQueryRewriteStrategy
 from app.core.config import Settings
-from app.db.models import AgentTrace, Document, DocumentChunk, EvalCase, EvalResult, EvalRun
+from app.db.models import AgentTrace, Document, DocumentChunk, DocumentVersion, EvalCase, EvalResult, EvalRun
 from app.domain.enums import DocumentStatus, EvalRunStatus
-from app.domain.interfaces import EvaluationRunner, ScoredChunk
+from app.domain.interfaces import ChunkRecord, EvaluationRunner, Retriever, ScoredChunk
 from app.evals.dataset import GoldenCaseSpec, GoldenDataset, load_golden_dataset
 from app.indexing.chunker import SlidingWindowChunker
 from app.indexing.embedder import DeterministicEmbedder
@@ -44,17 +45,134 @@ class CaseExecution:
     trace_id: UUID | None
 
 
+class EvalScopedRetriever(Retriever):
+    """Restrict eval retrieval to dataset documents to avoid noisy cross-project data."""
+
+    def __init__(
+        self,
+        *,
+        base_retriever: Retriever,
+        db: Session,
+        allowed_document_ids: set[UUID],
+    ) -> None:
+        self._base_retriever = base_retriever
+        self._db = db
+        self._allowed_document_ids = allowed_document_ids
+
+    @staticmethod
+    def _lexical_terms(query: str) -> list[str]:
+        terms = re.findall(r"[\u4e00-\u9fff]+|[a-z0-9]+", query.lower())
+        return terms[:12]
+
+    @staticmethod
+    def _lexical_score(*, content: str, terms: list[str], raw_query: str) -> float:
+        if not terms:
+            return 0.0
+        text = content.lower()
+        matched = sum(1 for term in terms if term in text)
+        score = matched / max(len(terms), 1)
+        if raw_query.lower() in text:
+            score = max(score, 0.95)
+        return min(score, 1.0)
+
+    def _scoped_lexical_fallback(
+        self,
+        *,
+        query: str,
+        top_k: int,
+        score_threshold: float,
+    ) -> list[ScoredChunk]:
+        terms = self._lexical_terms(query)
+        if not terms or not self._allowed_document_ids:
+            return []
+
+        conditions = [DocumentChunk.content.ilike(f"%{term}%") for term in terms]
+        rows = (
+            self._db.execute(
+                select(DocumentChunk)
+                .where(DocumentChunk.document_id.in_(self._allowed_document_ids))
+                .where(or_(*conditions))
+                .limit(max(top_k * 10, 50))
+            )
+            .scalars()
+            .all()
+        )
+
+        scored: list[ScoredChunk] = []
+        for row in rows:
+            score = self._lexical_score(content=row.content, terms=terms, raw_query=query)
+            if score < score_threshold:
+                continue
+            metadata = dict(row.meta or {})
+            metadata["retrieval_source"] = "eval_scoped_lexical"
+            scored.append(
+                ScoredChunk(
+                    chunk=ChunkRecord(
+                        chunk_id=row.id,
+                        document_id=row.document_id,
+                        document_version_id=row.document_version_id,
+                        content=row.content,
+                        chunk_index=row.chunk_index,
+                        start_char=row.start_char or 0,
+                        end_char=row.end_char or len(row.content),
+                        metadata=metadata,
+                    ),
+                    score=score,
+                    distance=max(0.0, 1.0 - score),
+                )
+            )
+        scored.sort(key=lambda item: item.score, reverse=True)
+        return scored[:top_k]
+
+    async def retrieve(
+        self,
+        *,
+        query: str,
+        top_k: int,
+        score_threshold: float,
+        model: str,
+    ) -> list[ScoredChunk]:
+        expanded_top_k = max(top_k * 10, 50)
+        candidates = await self._base_retriever.retrieve(
+            query=query,
+            top_k=expanded_top_k,
+            score_threshold=0.0,
+            model=model,
+        )
+        vector_filtered = [item for item in candidates if item.chunk.document_id in self._allowed_document_ids]
+        lexical_candidates = self._scoped_lexical_fallback(
+            query=query,
+            top_k=expanded_top_k,
+            score_threshold=0.0,
+        )
+
+        merged: dict[UUID, ScoredChunk] = {}
+        for item in vector_filtered + lexical_candidates:
+            current = merged.get(item.chunk.chunk_id)
+            if current is None or item.score > current.score:
+                merged[item.chunk.chunk_id] = item
+
+        ranked = sorted(merged.values(), key=lambda item: item.score, reverse=True)
+        ranked = [item for item in ranked if item.score >= score_threshold]
+        return ranked[:top_k]
+
+
 class PgEvaluationRunner(EvaluationRunner):
     def __init__(self, *, db: Session, settings: Settings) -> None:
         self._db = db
         self._settings = settings
         self._logger = logging.getLogger("app.evals")
 
-    def _build_chat_service(self) -> RAGChatService:
+    def _build_chat_service(self, *, allowed_document_ids: set[UUID]) -> RAGChatService:
         embedder = DeterministicEmbedder(dimension=self._settings.vector_dim)
         vector_index = PgVectorIndex(db=self._db, settings=self._settings)
         repository = RetrievalRepository(vector_index=vector_index, db=self._db)
-        retriever = PgVectorRetriever(embedder=embedder, repository=repository, settings=self._settings)
+        base_retriever = PgVectorRetriever(embedder=embedder, repository=repository, settings=self._settings)
+        retriever = EvalScopedRetriever(
+            base_retriever=base_retriever,
+            db=self._db,
+            allowed_document_ids=allowed_document_ids,
+        )
         reranker = build_reranker(settings=self._settings)
         citation_assembler = BasicCitationAssembler()
         answer_generator = build_answer_generator(settings=self._settings)
@@ -107,17 +225,57 @@ class PgEvaluationRunner(EvaluationRunner):
                 self._db.commit()
                 self._db.refresh(created)
                 existing = created
+            else:
+                existing.title = spec.title
+                existing.mime_type = spec.mime_type
 
             doc_key_to_id[spec.key] = existing.id
 
-            latest_hash = self._db.execute(
-                select(DocumentChunk)
-                .where(DocumentChunk.document_id == existing.id)
-                .order_by(DocumentChunk.chunk_index.asc())
+            latest_version = self._db.execute(
+                select(DocumentVersion)
+                .where(DocumentVersion.document_id == existing.id)
+                .order_by(DocumentVersion.version_number.desc())
                 .limit(1)
             ).scalar_one_or_none()
+            current_version_hash = str(latest_version.content_sha256) if latest_version is not None else ""
 
-            needs_reindex = existing.status != DocumentStatus.INDEXED or latest_hash is None
+            if current_version_hash != content_hash:
+                next_version = 1 if latest_version is None else int(latest_version.version_number) + 1
+                self._db.add(
+                    DocumentVersion(
+                        id=uuid.uuid4(),
+                        document_id=existing.id,
+                        version_number=next_version,
+                        content_sha256=content_hash,
+                        content_text=spec.content,
+                        content_uri=None,
+                        size_bytes=len(content_bytes),
+                        meta={
+                            "filename": f"{spec.key}.txt",
+                            "source": "eval_dataset",
+                            "dataset": dataset.name,
+                            "doc_key": spec.key,
+                        },
+                    )
+                )
+                existing.status = DocumentStatus.RECEIVED
+                self._db.flush()
+
+            latest_version = self._db.execute(
+                select(DocumentVersion)
+                .where(DocumentVersion.document_id == existing.id)
+                .order_by(DocumentVersion.version_number.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+            latest_chunk = None
+            if latest_version is not None:
+                latest_chunk = self._db.execute(
+                    select(DocumentChunk.id)
+                    .where(DocumentChunk.document_version_id == latest_version.id)
+                    .limit(1)
+                ).scalar_one_or_none()
+
+            needs_reindex = existing.status != DocumentStatus.INDEXED or latest_chunk is None
             if needs_reindex:
                 await indexing.index_document(
                     document_id=existing.id,
@@ -318,6 +476,84 @@ class PgEvaluationRunner(EvaluationRunner):
             "citation_integrity_failures": sorted(set(failures)),
         }
 
+    @staticmethod
+    def _find_trace_step(trace: AgentTrace | None, *, state: str):
+        if trace is None:
+            return None
+        return next((step for step in trace.steps if step.state == state), None)
+
+    def _agentic_capability_failures(
+        self,
+        *,
+        case_spec: GoldenCaseSpec,
+        trace: AgentTrace | None,
+        answer_text: str,
+        answer_abstained: bool,
+        answer_reason: str | None,
+    ) -> list[str]:
+        tags = set(case_spec.tags or [])
+        if not tags:
+            return []
+
+        failures: list[str] = []
+        if trace is None:
+            return ["agentic_trace_missing"]
+
+        if "query_analysis" in tags:
+            analysis_step = self._find_trace_step(trace, state="ANALYZE_QUERY")
+            if analysis_step is None:
+                failures.append("agentic_query_analysis_step_missing")
+            else:
+                payload = analysis_step.output_payload or {}
+                required = {"normalized_query", "corrected_query", "intent", "need_retrieval"}
+                if any(key not in payload for key in required):
+                    failures.append("agentic_query_analysis_payload_missing")
+
+        route_step = self._find_trace_step(trace, state="ROUTE")
+        if "routing" in tags:
+            if route_step is None:
+                failures.append("agentic_route_step_missing")
+            else:
+                payload = route_step.output_payload or {}
+                required = {"preferred_route", "selected_route", "route_reason"}
+                if any(key not in payload for key in required):
+                    failures.append("agentic_route_payload_missing")
+
+        if "route_fallback" in tags:
+            if route_step is None or not bool((route_step.output_payload or {}).get("fallback", False)):
+                failures.append("agentic_route_fallback_missing")
+
+        if "iterative_retrieval" in tags:
+            retrieve_steps = [step for step in trace.steps if step.state == "RETRIEVE"]
+            if not retrieve_steps:
+                failures.append("agentic_retrieve_step_missing")
+            else:
+                payload = retrieve_steps[-1].output_payload or {}
+                required = {"top_score", "stagnation_count", "retrieval_stagnated"}
+                if any(key not in payload for key in required):
+                    failures.append("agentic_iterative_payload_missing")
+
+        if "rerank_filter" in tags:
+            rerank_step = self._find_trace_step(trace, state="RERANK")
+            if rerank_step is None:
+                failures.append("agentic_rerank_step_missing")
+            else:
+                payload = rerank_step.output_payload or {}
+                required = {"filter_min_score", "reranked_count_before_filter", "reranked_count"}
+                if any(key not in payload for key in required):
+                    failures.append("agentic_rerank_filter_payload_missing")
+
+        if "conflict" in tags and not answer_abstained:
+            reason_flag = answer_reason == "evidence_conflict"
+            uncertainty_marker = "uncertain" in answer_text.lower()
+            conflict_signal = bool((trace.meta or {}).get("conflict", False))
+            if not reason_flag:
+                failures.append("agentic_conflict_reason_missing")
+            if not (uncertainty_marker or conflict_signal):
+                failures.append("agentic_conflict_uncertainty_missing")
+
+        return failures
+
     async def _run_case(
         self,
         *,
@@ -387,6 +623,13 @@ class PgEvaluationRunner(EvaluationRunner):
         fallback_visible = False
         if trace is not None:
             fallback_visible = any(bool((step.output_payload or {}).get("fallback", False)) for step in trace.steps)
+        capability_failures = self._agentic_capability_failures(
+            case_spec=case_spec,
+            trace=trace,
+            answer_text=message.content,
+            answer_abstained=answer.abstained,
+            answer_reason=answer.reason,
+        )
 
         failure_reasons: list[str] = []
 
@@ -420,6 +663,7 @@ class PgEvaluationRunner(EvaluationRunner):
 
         if fallback_used and not fallback_visible:
             failure_reasons.append("fallback_not_visible_in_trace")
+        failure_reasons.extend(capability_failures)
 
         passed = len(failure_reasons) == 0
 
@@ -446,6 +690,10 @@ class PgEvaluationRunner(EvaluationRunner):
                 "fallback_visible": fallback_visible,
                 "max_steps": self._settings.agent_max_steps,
                 "max_rewrites": self._settings.agent_max_rewrites,
+            },
+            "agentic": {
+                "tags": case_spec.tags,
+                "capability_failures": sorted(set(capability_failures)),
             },
             "failure_reasons": sorted(set(failure_reasons)),
             "top_k": top_k,
@@ -500,6 +748,14 @@ class PgEvaluationRunner(EvaluationRunner):
             for item in executions
             if "fallback_not_visible_in_trace" in item.metrics.get("failure_reasons", [])
         )
+        capability_failures = sum(
+            1
+            for item in executions
+            if any(
+                str(reason).startswith("agentic_")
+                for reason in item.metrics.get("failure_reasons", [])
+            )
+        )
 
         unsupported_answer_rate = unsupported_count / total if total else 0.0
         gate_passed = (
@@ -509,6 +765,7 @@ class PgEvaluationRunner(EvaluationRunner):
             and step_violations == 0
             and rewrite_violations == 0
             and fallback_visibility_failures == 0
+            and capability_failures == 0
         )
 
         failed_cases = [
@@ -548,6 +805,7 @@ class PgEvaluationRunner(EvaluationRunner):
                 "step_limit_violations": step_violations,
                 "rewrite_limit_violations": rewrite_violations,
                 "fallback_visibility_failures": fallback_visibility_failures,
+                "agentic_capability_failures": capability_failures,
             },
             "failed_case_samples": failed_cases,
             "gate_passed": gate_passed,
@@ -576,7 +834,7 @@ class PgEvaluationRunner(EvaluationRunner):
             self._db.query(EvalResult).filter(EvalResult.run_id == run.id).delete(synchronize_session=False)
             self._db.flush()
 
-            chat_service = self._build_chat_service()
+            chat_service = self._build_chat_service(allowed_document_ids=set(doc_key_to_id.values()))
             executions: list[CaseExecution] = []
             for case_spec in dataset.cases:
                 case_row = self._upsert_eval_case(dataset=dataset, case=case_spec)

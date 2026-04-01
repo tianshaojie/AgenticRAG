@@ -43,6 +43,9 @@ def test_get_chat_trace_and_persistence(client, db_session) -> None:
     assert trace["steps"][0]["state"] == "INIT"
     assert "input_summary" in trace["steps"][0]
     assert "output_summary" in trace["steps"][0]
+    states = {step["state"] for step in trace["steps"]}
+    assert "ROUTE" in states
+    assert "CRITIQUE" in states
 
     persisted = db_session.execute(
         select(AgentTrace).where(AgentTrace.session_id == session_id)

@@ -15,6 +15,13 @@ class ChatQueryRequest(BaseModel):
     embedding_model: str = Field(default="deterministic-local-v1")
 
 
+class UncertaintySignal(BaseModel):
+    is_uncertain: bool
+    reason: str
+    conflict_type: str | None = None
+    conflict_chunk_ids: list[UUID] = Field(default_factory=list)
+
+
 class ChatQueryResponse(BaseModel):
     session_id: UUID
     message_id: UUID
@@ -23,4 +30,5 @@ class ChatQueryResponse(BaseModel):
     retrieval_results: list[RetrievalResult]
     abstained: bool
     reason: str | None = None
+    uncertainty: UncertaintySignal | None = None
     created_at: datetime

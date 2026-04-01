@@ -113,3 +113,72 @@ async def test_eval_runner_fails_gate_on_citation_integrity(tmp_path, db_session
     row = db_session.execute(select(EvalResult).where(EvalResult.run_id == run.id)).scalar_one()
     assert row.passed is False
     assert "citation_expected_document_mismatch" in row.metrics["failure_reasons"]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_eval_runner_fails_gate_on_agentic_conflict_regression(tmp_path, db_session) -> None:
+    dataset_path = tmp_path / "agentic_conflict_regression.json"
+    dataset_path.write_text(
+        json.dumps(
+            {
+                "dataset": "agentic_conflict_regression",
+                "documents": [
+                    {
+                        "key": "doc_only",
+                        "title": "Single Policy",
+                        "content": "EVAL_CONFLICT_SINGLE_DOC_ONLY_V1 信用账户支持融资融券交易。",
+                    }
+                ],
+                "cases": [
+                    {
+                        "name": "conflict_case_without_conflict_signal",
+                        "question": "EVAL_CONFLICT_SINGLE_DOC_ONLY_V1 信用账户支持融资融券吗",
+                        "expected_document_keys": ["doc_only"],
+                        "expected_chunk_indices": [0],
+                        "expected_abstain": False,
+                        "citation_constraints": {
+                            "min_count": 1,
+                            "require_resolved_chunk": True,
+                        },
+                        "tags": ["conflict"],
+                        "difficulty": "easy",
+                        "scenario_type": "conflict",
+                        "top_k": 5,
+                        "score_threshold": 0.1,
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    settings = get_settings()
+    run = EvalRun(
+        id=uuid.uuid4(),
+        name="test-eval-agentic-conflict-regression",
+        status=EvalRunStatus.QUEUED,
+        triggered_by="pytest",
+        config={
+            "dataset": "agentic_conflict_regression",
+            "dataset_path": str(dataset_path),
+        },
+        summary={},
+    )
+    db_session.add(run)
+    db_session.commit()
+
+    runner = PgEvaluationRunner(db=db_session, settings=settings)
+    await runner.run(run_id=run.id)
+
+    db_session.refresh(run)
+    assert run.status == EvalRunStatus.FAILED
+    assert run.summary["gate_passed"] is False
+
+    row = db_session.execute(select(EvalResult).where(EvalResult.run_id == run.id)).scalar_one()
+    assert row.passed is False
+    assert any(
+        reason in row.metrics["failure_reasons"]
+        for reason in ("agentic_conflict_reason_missing", "agentic_conflict_uncertainty_missing")
+    )

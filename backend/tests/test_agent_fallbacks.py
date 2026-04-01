@@ -80,7 +80,7 @@ class FailingAnswerGenerator:
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_retrieval_failure_fallback_to_abstain(db_session) -> None:
-    settings = Settings(agent_max_steps=8, agent_max_rewrites=1)
+    settings = Settings(agent_max_steps=12, agent_max_rewrites=1)
     session = ChatSession(id=uuid.uuid4(), title="fallback", meta={})
     db_session.add(session)
     db_session.flush()
@@ -114,7 +114,7 @@ async def test_retrieval_failure_fallback_to_abstain(db_session) -> None:
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_rerank_failure_fallback_to_candidates(db_session) -> None:
-    settings = Settings(agent_max_steps=8, agent_max_rewrites=0)
+    settings = Settings(agent_max_steps=12, agent_max_rewrites=0)
     session = ChatSession(id=uuid.uuid4(), title="fallback", meta={})
     db_session.add(session)
     db_session.flush()
@@ -147,7 +147,7 @@ async def test_rerank_failure_fallback_to_candidates(db_session) -> None:
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_generation_failure_fallback_to_abstain(db_session) -> None:
-    settings = Settings(agent_max_steps=8, agent_max_rewrites=0)
+    settings = Settings(agent_max_steps=12, agent_max_rewrites=0)
     session = ChatSession(id=uuid.uuid4(), title="fallback", meta={})
     db_session.add(session)
     db_session.flush()
@@ -171,8 +171,10 @@ async def test_generation_failure_fallback_to_abstain(db_session) -> None:
         trace_id="trace-fallback-generate",
     )
 
-    assert result.final_state == AgentState.COMPLETE
+    assert result.final_state == AgentState.ABSTAIN
     assert result.answer.abstained is True
     assert result.answer.reason == "generation_failure_fallback"
     generate_step = next(step for step in result.steps if step.state == AgentState.GENERATE_ANSWER)
     assert generate_step.fallback is True
+    critique_step = next(step for step in result.steps if step.state == AgentState.CRITIQUE)
+    assert critique_step.fallback is True

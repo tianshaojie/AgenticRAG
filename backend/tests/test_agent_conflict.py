@@ -39,6 +39,9 @@ def test_evidence_conflict_detection() -> None:
     assert assessed.sufficient is True
     assert assessed.conflict is True
     assert assessed.reason == "evidence_conflict"
+    assert assessed.conflict_type == "negation_mismatch"
+    assert len(assessed.conflict_chunk_ids) == 2
+    assert assessed.conflict_score_gap is not None
 
 
 @pytest.mark.integration
@@ -74,3 +77,8 @@ def test_conflict_answer_is_marked_uncertain(client) -> None:
     assert payload["abstained"] is False
     assert "uncertain" in payload["answer"].lower()
     assert payload["reason"] == "evidence_conflict"
+    assert payload["uncertainty"] is not None
+    assert payload["uncertainty"]["is_uncertain"] is True
+    assert payload["uncertainty"]["reason"] == "evidence_conflict"
+    assert payload["uncertainty"]["conflict_type"] == "negation_mismatch"
+    assert len(payload["uncertainty"]["conflict_chunk_ids"]) == 2

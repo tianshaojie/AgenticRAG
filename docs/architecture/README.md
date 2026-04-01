@@ -8,6 +8,7 @@
 - [Database Schema](./database-schema.md)
 - [pgvector Retrieval Design](./pgvector-retrieval-design.md)
 - [Agent Policy](./agent-policy.md)
+- [Agentic Construction Guidance](./agentic-construction-guidance.md)
 - [LLM Provider Integration](./llm-provider.md)
 - [Reranker Provider Integration](./reranker-provider.md)
 - [Eval Methodology](./eval-methodology.md)

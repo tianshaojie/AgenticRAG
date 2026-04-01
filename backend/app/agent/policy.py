@@ -13,8 +13,15 @@ class DefaultAgentPolicy(AgentPolicy):
 
         if state == AgentState.ANALYZE_QUERY:
             if bool(context.get("need_retrieval", True)):
-                return AgentState.RETRIEVE.value
+                return AgentState.ROUTE.value
             return AgentState.ABSTAIN.value
+
+        if state == AgentState.ROUTE:
+            if bool(context.get("route_fallback_to_abstain", False)):
+                return AgentState.ABSTAIN.value
+            if bool(context.get("route_failed", False)):
+                return AgentState.FAILED.value
+            return AgentState.RETRIEVE.value
 
         if state == AgentState.RETRIEVE:
             if bool(context.get("retrieval_fallback_to_abstain", False)):
@@ -24,6 +31,10 @@ class DefaultAgentPolicy(AgentPolicy):
             return AgentState.EVALUATE_EVIDENCE.value
 
         if state == AgentState.EVALUATE_EVIDENCE:
+            if bool(context.get("retrieval_stagnated", False)) and not bool(
+                context.get("evidence_sufficient", False)
+            ):
+                return AgentState.ABSTAIN.value
             if bool(context.get("evidence_sufficient", False)):
                 return AgentState.RERANK.value
             if bool(context.get("can_rewrite", False)):
@@ -36,6 +47,8 @@ class DefaultAgentPolicy(AgentPolicy):
             return AgentState.RETRIEVE.value
 
         if state == AgentState.RERANK:
+            if bool(context.get("rerank_empty", False)):
+                return AgentState.ABSTAIN.value
             if bool(context.get("rerank_failed", False)):
                 return AgentState.FAILED.value
             return AgentState.GENERATE_ANSWER.value
@@ -43,6 +56,13 @@ class DefaultAgentPolicy(AgentPolicy):
         if state == AgentState.GENERATE_ANSWER:
             if bool(context.get("generation_failed", False)):
                 return AgentState.FAILED.value
+            return AgentState.CRITIQUE.value
+
+        if state == AgentState.CRITIQUE:
+            if bool(context.get("critique_failed", False)):
+                return AgentState.FAILED.value
+            if bool(context.get("critique_requires_abstain", False)):
+                return AgentState.ABSTAIN.value
             return AgentState.COMPLETE.value
 
         if state in {AgentState.ABSTAIN, AgentState.COMPLETE, AgentState.FAILED}:

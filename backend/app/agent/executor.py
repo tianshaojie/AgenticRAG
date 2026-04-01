@@ -5,15 +5,31 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.agent.evidence import DefaultEvidenceSufficiencyJudge
-from app.agent.interfaces import EvidenceSufficiencyJudge, QueryRewriteStrategy
-from app.agent.models import AgentExecutionResult, AgentStepModel, EvidenceAssessment
+from app.agent.filtering import DefaultEvidenceFilter
+from app.agent.interfaces import (
+    EvidenceFilter,
+    EvidenceSufficiencyJudge,
+    QueryAnalyzer,
+    QueryRewriteStrategy,
+    QueryRouter,
+)
+from app.agent.models import (
+    AgentExecutionResult,
+    AgentStepModel,
+    EvidenceAssessment,
+    QueryAnalysis,
+    RouteDecision,
+)
 from app.agent.policy import DefaultAgentPolicy
+from app.agent.query_analysis import DeterministicQueryAnalyzer
 from app.agent.rewrite import DefaultQueryRewriteStrategy
-from app.agent.state_machine import AgentState, TERMINAL_STATES
+from app.agent.routing import HeuristicQueryRouter
+from app.agent.state_machine import TERMINAL_STATES, AgentState
 from app.core.config import Settings
 from app.core.errors import AppError
 from app.core.resilience import ResiliencePolicy, call_with_resilience
@@ -23,10 +39,11 @@ from app.domain.interfaces import (
     AnswerGenerator,
     CitationAssembler,
     GeneratedAnswer,
-    Retriever,
     Reranker,
+    Retriever,
     ScoredChunk,
 )
+from app.retrieval.route_provider_factory import build_route_retrievers
 
 
 @dataclass(slots=True)
@@ -37,15 +54,32 @@ class _RuntimeContext:
     score_threshold: float
     embedding_model: str
     rewrite_count: int = 0
+    analysis: QueryAnalysis | None = None
+    route_decision: RouteDecision | None = None
     need_retrieval: bool = True
+    route_preferred: str = "pgvector"
+    route_selected: str = "pgvector"
+    route_retriever_name: str = "unknown"
+    route_provider_name: str = "unknown"
+    route_reason: str = "default_pgvector"
+    route_failed: bool = False
+    route_fallback_to_abstain: bool = False
+    route_fallback_used: bool = False
     candidates: list[ScoredChunk] | None = None
     reranked: list[ScoredChunk] | None = None
     assessment: EvidenceAssessment | None = None
     answer: GeneratedAnswer | None = None
+    critique_failed: bool = False
+    critique_requires_abstain: bool = False
+    critique_reason: str | None = None
     fallback_used: bool = False
     failure_reason: str | None = None
     abstain_reason: str | None = None
     retrieve_fallback_to_abstain: bool = False
+    last_retrieval_top_score: float | None = None
+    retrieval_stagnation_count: int = 0
+    retrieval_stagnated: bool = False
+    rerank_empty: bool = False
 
 
 class FiniteStateAgentExecutor:
@@ -59,8 +93,12 @@ class FiniteStateAgentExecutor:
         citation_assembler: CitationAssembler,
         answer_generator: AnswerGenerator,
         policy: DefaultAgentPolicy | None = None,
+        query_analyzer: QueryAnalyzer | None = None,
+        query_router: QueryRouter | None = None,
         rewrite_strategy: QueryRewriteStrategy | None = None,
         evidence_judge: EvidenceSufficiencyJudge | None = None,
+        evidence_filter: EvidenceFilter | None = None,
+        route_retrievers: dict[str, Retriever] | None = None,
     ) -> None:
         self._db = db
         self._settings = settings
@@ -69,13 +107,57 @@ class FiniteStateAgentExecutor:
         self._citation_assembler = citation_assembler
         self._answer_generator = answer_generator
         self._policy = policy or DefaultAgentPolicy()
+        self._query_analyzer = query_analyzer or DeterministicQueryAnalyzer()
+        self._query_router = query_router or HeuristicQueryRouter()
         self._rewrite_strategy = rewrite_strategy or DefaultQueryRewriteStrategy()
+        self._evidence_filter = evidence_filter or DefaultEvidenceFilter(
+            max_chunks_per_document=settings.agent_max_chunks_per_document
+        )
+        if route_retrievers is None:
+            self._route_retrievers = build_route_retrievers(
+                settings=settings,
+                db=db,
+                pgvector_retriever=retriever,
+            )
+        else:
+            self._route_retrievers = {}
+            for route_key, route_retriever in route_retrievers.items():
+                normalized_route = route_key.strip().lower()
+                if not normalized_route:
+                    continue
+                self._route_retrievers[normalized_route] = route_retriever
+        if "pgvector" not in self._route_retrievers:
+            self._route_retrievers["pgvector"] = retriever
         self._logger = logging.getLogger("app.agent")
         self._evidence_judge = evidence_judge or DefaultEvidenceSufficiencyJudge(
             min_results=settings.agent_min_evidence_results,
             min_score=settings.evidence_min_score,
             conflict_delta=settings.agent_conflict_score_delta,
         )
+
+    @staticmethod
+    def _route_provider_name(route_retriever: Retriever | None) -> str:
+        if route_retriever is None:
+            return "unknown"
+        provider_name = getattr(route_retriever, "provider_name", None)
+        if isinstance(provider_name, str) and provider_name.strip():
+            return provider_name
+        return type(route_retriever).__name__
+
+    @staticmethod
+    def _analysis_payload(analysis: QueryAnalysis | None) -> dict[str, Any]:
+        if analysis is None:
+            return {}
+        return {
+            "original_query": analysis.original_query[:200],
+            "normalized_query": analysis.normalized_query[:200],
+            "corrected_query": analysis.corrected_query[:200],
+            "expanded_terms": analysis.expanded_terms[:8],
+            "intent": analysis.intent,
+            "need_retrieval": analysis.need_retrieval,
+            "confidence": round(analysis.confidence, 3),
+            "reasons": analysis.reasons[:8],
+        }
 
     def _record_step(
         self,
@@ -238,36 +320,130 @@ class FiniteStateAgentExecutor:
 
                 elif state == AgentState.ANALYZE_QUERY:
                     action = "analyze_query"
-                    cleaned = runtime.current_query.strip()
-                    runtime.need_retrieval = len(cleaned) >= self._settings.agent_query_min_chars
-                    if not runtime.need_retrieval:
-                        runtime.abstain_reason = "query_too_short"
-                    input_summary = "analyze query for retrieval need"
-                    output_summary = (
-                        "retrieval_required" if runtime.need_retrieval else "skip_retrieval_abstain"
+                    input_payload = {"query": runtime.current_query[:200]}
+                    runtime.analysis = self._query_analyzer.analyze(
+                        query=runtime.current_query,
+                        min_query_chars=self._settings.agent_query_min_chars,
                     )
-                    input_payload = {"query": cleaned[:200]}
-                    output_payload = {"need_retrieval": runtime.need_retrieval}
+                    runtime.current_query = runtime.analysis.corrected_query
+                    runtime.need_retrieval = runtime.analysis.need_retrieval
+                    if not runtime.need_retrieval:
+                        runtime.abstain_reason = "analysis_skip_retrieval"
+                    input_summary = "analyze query intent, normalization, retrieval need"
+                    output_summary = (
+                        f"intent={runtime.analysis.intent}, "
+                        f"need_retrieval={runtime.analysis.need_retrieval}, "
+                        f"confidence={runtime.analysis.confidence:.2f}"
+                    )
+                    output_payload = self._analysis_payload(runtime.analysis)
+
+                elif state == AgentState.ROUTE:
+                    action = "route_query"
+                    input_summary = "route query to available tools"
+                    analysis = runtime.analysis or self._query_analyzer.analyze(
+                        query=runtime.current_query,
+                        min_query_chars=self._settings.agent_query_min_chars,
+                    )
+                    runtime.analysis = analysis
+                    input_payload = {
+                        "query": runtime.current_query[:200],
+                        "need_retrieval": runtime.need_retrieval,
+                        "analysis": self._analysis_payload(analysis),
+                        "available_routes": self._settings.agent_available_routes,
+                    }
+
+                    runtime.route_failed = False
+                    runtime.route_fallback_to_abstain = False
+                    runtime.route_decision = self._query_router.route(
+                        analysis=analysis,
+                        available_routes=self._settings.agent_available_routes,
+                    )
+                    runtime.route_preferred = runtime.route_decision.preferred_route
+                    runtime.route_selected = runtime.route_decision.selected_route.lower()
+                    runtime.route_reason = runtime.route_decision.reason
+                    runtime.route_fallback_used = runtime.route_decision.fallback
+                    runtime.route_retriever_name = "unknown"
+                    runtime.route_provider_name = "unknown"
+                    if runtime.route_selected == "abstain":
+                        runtime.route_fallback_to_abstain = True
+                        runtime.abstain_reason = "route_no_available_tool"
+                    elif runtime.route_selected not in self._route_retrievers:
+                        if "pgvector" in self._route_retrievers:
+                            runtime.route_selected = "pgvector"
+                            runtime.route_fallback_used = True
+                            runtime.route_reason = (
+                                f"{runtime.route_preferred}_route_missing_fallback_pgvector"
+                            )
+                        else:
+                            runtime.route_fallback_to_abstain = True
+                            runtime.route_fallback_used = True
+                            runtime.abstain_reason = "route_not_implemented"
+                            runtime.route_reason = f"{runtime.route_preferred}_route_not_implemented"
+                    route_retriever = self._route_retrievers.get(runtime.route_selected)
+                    if route_retriever is not None:
+                        runtime.route_retriever_name = type(route_retriever).__name__
+                        runtime.route_provider_name = self._route_provider_name(route_retriever)
+                    runtime.fallback_used = runtime.fallback_used or runtime.route_fallback_used
+
+                    output_summary = (
+                        f"preferred={runtime.route_preferred}, selected={runtime.route_selected}, "
+                        f"fallback={runtime.route_fallback_used}"
+                    )
+                    output_payload = {
+                        "preferred_route": runtime.route_preferred,
+                        "selected_route": runtime.route_selected,
+                        "available_routes": runtime.route_decision.available_routes
+                        if runtime.route_decision
+                        else self._settings.agent_available_routes,
+                        "route_reason": runtime.route_reason,
+                        "route_confidence": runtime.route_decision.confidence if runtime.route_decision else 0.0,
+                        "route_retriever": runtime.route_retriever_name,
+                        "route_provider": runtime.route_provider_name,
+                        "fallback": runtime.route_fallback_used,
+                        "analysis_intent": analysis.intent,
+                    }
 
                 elif state == AgentState.RETRIEVE:
                     action = "retrieve"
+                    route_retriever = self._route_retrievers.get(runtime.route_selected)
+                    if route_retriever is None:
+                        route_retriever = self._route_retrievers["pgvector"]
+                        runtime.route_selected = "pgvector"
+                        runtime.route_retriever_name = type(route_retriever).__name__
+                        runtime.route_provider_name = self._route_provider_name(route_retriever)
+                        runtime.route_fallback_used = True
+                        runtime.fallback_used = True
+                        runtime.route_reason = (
+                            f"{runtime.route_preferred}_route_missing_fallback_pgvector"
+                        )
+                    else:
+                        runtime.route_retriever_name = type(route_retriever).__name__
+                        runtime.route_provider_name = self._route_provider_name(route_retriever)
                     input_summary = f"query={runtime.current_query[:120]}"
                     input_payload = {
                         "query": runtime.current_query[:200],
                         "top_k": runtime.top_k,
                         "score_threshold": runtime.score_threshold,
+                        "route_selected": runtime.route_selected,
+                        "route_retriever": runtime.route_retriever_name,
+                        "route_provider": runtime.route_provider_name,
                     }
                     runtime.retrieve_fallback_to_abstain = False
+                    runtime.retrieval_stagnated = False
                     try:
                         runtime.candidates = await call_with_resilience(
                             operation="retrieval",
-                            provider_name=type(self._retriever).__name__,
+                            provider_name=runtime.route_provider_name,
                             policy=retrieval_policy,
-                            call=lambda: self._retriever.retrieve(
-                                query=runtime.current_query,
-                                top_k=runtime.top_k,
-                                score_threshold=runtime.score_threshold,
-                                model=runtime.embedding_model,
+                            call=lambda route_retriever=route_retriever,
+                            query=runtime.current_query,
+                            top_k=runtime.top_k,
+                            score_threshold=runtime.score_threshold,
+                            model=runtime.embedding_model: route_retriever.retrieve(
+                                query=query,
+                                top_k=top_k,
+                                score_threshold=score_threshold,
+                                model=model,
                             ),
                             logger=self._logger,
                             request_id=request_id,
@@ -281,11 +457,37 @@ class FiniteStateAgentExecutor:
                         )
                         runtime.fallback_used = runtime.fallback_used or fallback_used
                         top_score = max((item.score for item in runtime.candidates), default=0.0)
-                        output_summary = f"retrieved={len(runtime.candidates)} top_score={top_score:.3f}"
+                        previous_top_score = runtime.last_retrieval_top_score
+                        score_gain: float | None = None
+                        if previous_top_score is None:
+                            runtime.retrieval_stagnation_count = 0
+                        else:
+                            score_gain = top_score - previous_top_score
+                            if score_gain < self._settings.agent_retrieval_min_score_gain:
+                                runtime.retrieval_stagnation_count += 1
+                            else:
+                                runtime.retrieval_stagnation_count = 0
+                        runtime.last_retrieval_top_score = top_score
+                        runtime.retrieval_stagnated = (
+                            runtime.rewrite_count > 0
+                            and runtime.retrieval_stagnation_count
+                            >= self._settings.agent_retrieval_stagnation_limit
+                        )
+                        output_summary = (
+                            f"retrieved={len(runtime.candidates)} top_score={top_score:.3f} "
+                            f"stagnated={runtime.retrieval_stagnated}"
+                        )
                         output_payload = {
                             "retrieved_count": len(runtime.candidates),
                             "top_score": top_score,
+                            "previous_top_score": previous_top_score,
+                            "score_gain": score_gain,
+                            "stagnation_count": runtime.retrieval_stagnation_count,
+                            "retrieval_stagnated": runtime.retrieval_stagnated,
                             "fallback": fallback_used,
+                            "route_selected": runtime.route_selected,
+                            "route_retriever": runtime.route_retriever_name,
+                            "route_provider": runtime.route_provider_name,
                         }
                     except AppError as exc:
                         runtime.candidates = []
@@ -296,10 +498,17 @@ class FiniteStateAgentExecutor:
                         output_payload = {
                             "retrieved_count": 0,
                             "top_score": 0.0,
+                            "previous_top_score": runtime.last_retrieval_top_score,
+                            "score_gain": None,
+                            "stagnation_count": runtime.retrieval_stagnation_count,
+                            "retrieval_stagnated": runtime.retrieval_stagnated,
                             "fallback": True,
                             "fallback_stage": "retrieval",
                             "fallback_reason": runtime.abstain_reason,
                             "error_code": exc.code,
+                            "route_selected": runtime.route_selected,
+                            "route_retriever": runtime.route_retriever_name,
+                            "route_provider": runtime.route_provider_name,
                         }
 
                 elif state == AgentState.EVALUATE_EVIDENCE:
@@ -309,13 +518,16 @@ class FiniteStateAgentExecutor:
                         query=runtime.current_query,
                         candidates=candidates,
                     )
+                    if not runtime.assessment.sufficient and runtime.retrieval_stagnated:
+                        runtime.abstain_reason = "retrieval_stagnated"
                     if not runtime.assessment.sufficient and runtime.rewrite_count >= self._settings.agent_max_rewrites:
                         runtime.abstain_reason = runtime.assessment.reason
 
                     input_summary = f"evaluate candidates={len(candidates)}"
                     output_summary = (
                         f"sufficient={runtime.assessment.sufficient}, conflict={runtime.assessment.conflict}, "
-                        f"reason={runtime.assessment.reason}"
+                        f"reason={runtime.assessment.reason}, "
+                        f"retrieval_stagnated={runtime.retrieval_stagnated}"
                     )
                     input_payload = {
                         "candidate_count": len(candidates),
@@ -324,7 +536,15 @@ class FiniteStateAgentExecutor:
                     output_payload = {
                         "sufficient": runtime.assessment.sufficient,
                         "conflict": runtime.assessment.conflict,
+                        "conflict_type": runtime.assessment.conflict_type,
+                        "conflict_chunk_ids": [
+                            str(chunk_id) for chunk_id in runtime.assessment.conflict_chunk_ids
+                        ],
+                        "conflict_score_gap": runtime.assessment.conflict_score_gap,
                         "reason": runtime.assessment.reason,
+                        "retrieval_stagnated": runtime.retrieval_stagnated,
+                        "stagnation_count": runtime.retrieval_stagnation_count,
+                        "last_top_score": runtime.last_retrieval_top_score,
                         "can_rewrite": runtime.rewrite_count < self._settings.agent_max_rewrites,
                     }
 
@@ -344,7 +564,11 @@ class FiniteStateAgentExecutor:
                         )
                         input_summary = f"rewrite attempt={runtime.rewrite_count}"
                         output_summary = f"rewritten_query={rewritten[:80]}"
-                        input_payload = {"original_query": runtime.current_query[:160], "reason": reason}
+                        input_payload = {
+                            "original_query": runtime.current_query[:160],
+                            "reason": reason,
+                            "stagnation_count": runtime.retrieval_stagnation_count,
+                        }
                         output_payload = {"rewritten_query": rewritten[:200]}
                         runtime.current_query = rewritten
 
@@ -358,10 +582,13 @@ class FiniteStateAgentExecutor:
                             operation="rerank",
                             provider_name=type(self._reranker).__name__,
                             policy=rerank_policy,
-                            call=lambda: self._reranker.rerank(
-                                query=runtime.current_query,
+                            call=lambda candidates=candidates, query=runtime.current_query: self._reranker.rerank(
+                                query=query,
                                 candidates=candidates,
-                                top_n=min(self._settings.agent_rerank_top_n, max(len(candidates), 1)),
+                                top_n=min(
+                                    self._settings.agent_rerank_top_n,
+                                    max(len(candidates), 1),
+                                ),
                                 request_id=request_id,
                                 trace_id=trace_id,
                             ),
@@ -371,22 +598,42 @@ class FiniteStateAgentExecutor:
                             query_id=query_id,
                             agent_state=state.value,
                         )
-                        output_summary = f"reranked={len(runtime.reranked)}"
-                        output_payload = {
-                            "reranked_count": len(runtime.reranked),
-                            "fallback": runtime.fallback_used,
-                        }
                     except AppError as exc:
                         runtime.fallback_used = True
                         runtime.reranked = candidates
-                        output_summary = "rerank_failed_fallback_to_candidates"
                         output_payload = {
-                            "reranked_count": len(runtime.reranked),
                             "fallback": True,
                             "fallback_stage": "rerank",
                             "fallback_reason": "rerank_failure_fallback",
                             "error_code": exc.code,
                         }
+
+                    reranked_before_filter = len(runtime.reranked or [])
+                    filter_min_score = max(runtime.score_threshold, self._settings.agent_filter_min_score)
+                    filtered = self._evidence_filter.filter(
+                        query=runtime.current_query,
+                        candidates=runtime.reranked or [],
+                        min_score=filter_min_score,
+                        top_n=self._settings.agent_rerank_top_n,
+                    )
+                    runtime.reranked = filtered
+                    runtime.rerank_empty = len(filtered) == 0
+                    if runtime.rerank_empty:
+                        runtime.abstain_reason = "filtered_evidence_empty"
+
+                    output_summary = (
+                        f"reranked={reranked_before_filter} filtered={len(filtered)} "
+                        f"empty={runtime.rerank_empty}"
+                    )
+                    output_payload = {
+                        **output_payload,
+                        "reranked_count_before_filter": reranked_before_filter,
+                        "reranked_count": len(filtered),
+                        "filter_min_score": filter_min_score,
+                        "max_chunks_per_document": self._settings.agent_max_chunks_per_document,
+                        "rerank_empty": runtime.rerank_empty,
+                        "fallback": bool(output_payload.get("fallback", False)),
+                    }
 
                 elif state == AgentState.GENERATE_ANSWER:
                     action = "generate_answer"
@@ -397,8 +644,8 @@ class FiniteStateAgentExecutor:
                             operation="generation",
                             provider_name=type(self._answer_generator).__name__,
                             policy=generation_policy,
-                            call=lambda: self._answer_generator.generate(
-                                query=runtime.current_query,
+                            call=lambda citations=citations, query=runtime.current_query: self._answer_generator.generate(
+                                query=query,
                                 citations=citations,
                                 request_id=request_id,
                                 trace_id=trace_id,
@@ -420,7 +667,16 @@ class FiniteStateAgentExecutor:
                                 reason="evidence_conflict",
                             )
                         runtime.answer = answer
-                        output_payload = {"abstained": answer.abstained, "reason": answer.reason}
+                        output_payload = {
+                            "abstained": answer.abstained,
+                            "reason": answer.reason,
+                            "conflict": bool(runtime.assessment.conflict) if runtime.assessment else False,
+                            "conflict_type": runtime.assessment.conflict_type if runtime.assessment else None,
+                            "conflict_chunk_ids": [
+                                str(chunk_id)
+                                for chunk_id in (runtime.assessment.conflict_chunk_ids if runtime.assessment else [])
+                            ],
+                        }
                     except AppError as exc:
                         runtime.fallback_used = True
                         runtime.answer = GeneratedAnswer(
@@ -442,6 +698,94 @@ class FiniteStateAgentExecutor:
                         f"abstained={runtime.answer.abstained}, reason={runtime.answer.reason}"
                     )
                     input_payload = {"citation_count": len(citations)}
+
+                elif state == AgentState.CRITIQUE:
+                    action = "critique_answer"
+                    input_summary = "critique generated answer and evidence support"
+                    runtime.critique_failed = False
+                    runtime.critique_requires_abstain = False
+
+                    if runtime.answer is None:
+                        runtime.critique_failed = True
+                        runtime.failure_reason = "critique_answer_missing"
+                        runtime.critique_reason = runtime.failure_reason
+                        output_summary = runtime.failure_reason
+                        input_payload = {"answer_present": False}
+                        output_payload = {
+                            "critique_failed": True,
+                            "reason": runtime.failure_reason,
+                            "fallback": True,
+                        }
+                    else:
+                        citations_count = len(runtime.answer.citations)
+                        conflict = bool(runtime.assessment.conflict) if runtime.assessment else False
+                        fidelity_supported = runtime.answer.abstained or citations_count > 0
+                        uncertainty_marked = (
+                            "uncertain" in runtime.answer.text.lower()
+                            or runtime.answer.reason == "evidence_conflict"
+                        )
+
+                        input_payload = {
+                            "answer_abstained": runtime.answer.abstained,
+                            "answer_reason": runtime.answer.reason,
+                            "citation_count": citations_count,
+                            "conflict": conflict,
+                            "conflict_type": runtime.assessment.conflict_type if runtime.assessment else None,
+                            "conflict_chunk_ids": [
+                                str(chunk_id)
+                                for chunk_id in (runtime.assessment.conflict_chunk_ids if runtime.assessment else [])
+                            ],
+                        }
+                        runtime.critique_reason = "answer_supported_by_evidence"
+
+                        if not runtime.answer.abstained and citations_count == 0:
+                            runtime.fallback_used = True
+                            runtime.critique_requires_abstain = True
+                            runtime.critique_reason = "critique_missing_citations"
+                            runtime.abstain_reason = runtime.critique_reason
+                            runtime.answer = GeneratedAnswer(
+                                text="Insufficient evidence to answer reliably.",
+                                citations=[],
+                                abstained=True,
+                                reason=runtime.critique_reason,
+                            )
+                            fidelity_supported = False
+                        elif runtime.answer.abstained:
+                            runtime.critique_requires_abstain = True
+                            runtime.abstain_reason = runtime.answer.reason or runtime.abstain_reason
+                            runtime.critique_reason = runtime.answer.reason or "abstained"
+                        elif conflict:
+                            if not uncertainty_marked:
+                                runtime.answer = GeneratedAnswer(
+                                    text=(
+                                        "Evidence appears to be partially conflicting; answer may be uncertain.\n"
+                                        f"{runtime.answer.text}"
+                                    ),
+                                    citations=runtime.answer.citations,
+                                    abstained=False,
+                                    reason="evidence_conflict",
+                                )
+                                uncertainty_marked = True
+                            runtime.critique_reason = "evidence_conflict_reviewed"
+
+                        output_summary = (
+                            f"critique_requires_abstain={runtime.critique_requires_abstain}, "
+                            f"reason={runtime.critique_reason}"
+                        )
+                        output_payload = {
+                            "critique_failed": runtime.critique_failed,
+                            "critique_requires_abstain": runtime.critique_requires_abstain,
+                            "fidelity_supported": fidelity_supported,
+                            "conflict": conflict,
+                            "conflict_type": runtime.assessment.conflict_type if runtime.assessment else None,
+                            "conflict_chunk_ids": [
+                                str(chunk_id)
+                                for chunk_id in (runtime.assessment.conflict_chunk_ids if runtime.assessment else [])
+                            ],
+                            "uncertainty_marked": uncertainty_marked if conflict else False,
+                            "reason": runtime.critique_reason,
+                            "fallback": runtime.fallback_used,
+                        }
 
                 elif state == AgentState.ABSTAIN:
                     action = "abstain"
@@ -487,13 +831,19 @@ class FiniteStateAgentExecutor:
                         current_state=state.value,
                         context={
                             "need_retrieval": runtime.need_retrieval,
+                            "route_failed": runtime.route_failed,
+                            "route_fallback_to_abstain": runtime.route_fallback_to_abstain,
                             "retrieval_fallback_to_abstain": runtime.retrieve_fallback_to_abstain,
                             "retrieval_failed": runtime.failure_reason == "retrieval_error",
+                            "retrieval_stagnated": runtime.retrieval_stagnated,
                             "evidence_sufficient": runtime.assessment.sufficient if runtime.assessment else False,
                             "can_rewrite": runtime.rewrite_count < self._settings.agent_max_rewrites,
                             "rewrite_failed": runtime.failure_reason == "rewrite_error",
+                            "rerank_empty": runtime.rerank_empty,
                             "rerank_failed": runtime.failure_reason == "rerank_error",
                             "generation_failed": runtime.failure_reason == "generation_error",
+                            "critique_failed": runtime.critique_failed,
+                            "critique_requires_abstain": runtime.critique_requires_abstain,
                         },
                     )
                     next_state = AgentState(next_value)
@@ -572,6 +922,17 @@ class FiniteStateAgentExecutor:
             "rewrite_count": runtime.rewrite_count,
             "fallback_used": runtime.fallback_used,
             "abstain_reason": runtime.abstain_reason,
+            "route_selected": runtime.route_selected,
+            "route_retriever": runtime.route_retriever_name,
+            "route_provider": runtime.route_provider_name,
+            "route_reason": runtime.route_reason,
+            "retrieval_stagnation_count": runtime.retrieval_stagnation_count,
+            "conflict": bool(runtime.assessment.conflict) if runtime.assessment else False,
+            "conflict_type": runtime.assessment.conflict_type if runtime.assessment else None,
+            "conflict_chunk_ids": [
+                str(chunk_id) for chunk_id in (runtime.assessment.conflict_chunk_ids if runtime.assessment else [])
+            ],
+            "critique_reason": runtime.critique_reason,
         }
 
         ranked = runtime.reranked if runtime.reranked else (runtime.candidates or [])

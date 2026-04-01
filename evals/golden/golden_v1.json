@@ -1,22 +1,27 @@
 {
   "dataset": "golden_v1",
-  "description": "Step 6 baseline golden dataset for retrieval, citation, abstain, and agent regression checks.",
+  "description": "Agentic core golden dataset covering query analysis, routing, iterative retrieval, rerank/filter, conflict critique, and abstain safety.",
   "documents": [
     {
       "key": "credit_policy",
       "title": "Credit Account Policy",
-      "content": "信用账户可以用于融资买入和融券卖出，需遵守担保品与风险控制规则。"
+      "content": "EVAL_CREDIT_POLICY_V1 信用账户支持融资融券交易。"
     },
     {
       "key": "eligibility_rule",
       "title": "Eligibility Rule",
-      "content": "开通信用账户前，用户需要完成风险测评并满足适当性要求。"
+      "content": "EVAL_ELIGIBILITY_RULE_V1 开通信用账户前，用户需要完成风险测评并满足适当性要求。"
+    },
+    {
+      "key": "conflict_policy_no",
+      "title": "Conflict Policy",
+      "content": "EVAL_CONFLICT_POLICY_NO_V1 信用账户不支持融资融券交易。"
     }
   ],
   "cases": [
     {
       "name": "credit_usage_retrieval",
-      "question": "融资买入和融券卖出",
+      "question": "EVAL_CREDIT_POLICY_V1",
       "expected_document_keys": ["credit_policy"],
       "expected_chunk_indices": [0],
       "expected_abstain": false,
@@ -24,15 +29,31 @@
         "min_count": 1,
         "require_resolved_chunk": true
       },
-      "tags": ["retrieval", "finance", "single_hop"],
+      "tags": ["retrieval", "query_analysis", "routing", "iterative_retrieval", "rerank_filter"],
       "difficulty": "easy",
       "scenario_type": "single_hop",
       "top_k": 5,
-      "score_threshold": 0.95
+      "score_threshold": 0.1
     },
     {
-      "name": "eligibility_requirement",
-      "question": "风险测评",
+      "name": "query_analysis_typo_correction",
+      "question": "retrival EVAL_CREDIT_POLICY_V1",
+      "expected_document_keys": ["credit_policy"],
+      "expected_chunk_indices": [0],
+      "expected_abstain": false,
+      "citation_constraints": {
+        "min_count": 1,
+        "require_resolved_chunk": true
+      },
+      "tags": ["query_analysis", "routing", "iterative_retrieval", "rerank_filter"],
+      "difficulty": "easy",
+      "scenario_type": "analysis",
+      "top_k": 5,
+      "score_threshold": 0.1
+    },
+    {
+      "name": "routing_sql_fallback_to_pgvector",
+      "question": "sql: EVAL_ELIGIBILITY_RULE_V1",
       "expected_document_keys": ["eligibility_rule"],
       "expected_chunk_indices": [0],
       "expected_abstain": false,
@@ -40,11 +61,27 @@
         "min_count": 1,
         "require_resolved_chunk": true
       },
-      "tags": ["retrieval", "eligibility"],
-      "difficulty": "easy",
-      "scenario_type": "single_hop",
+      "tags": ["routing", "route_fallback", "iterative_retrieval"],
+      "difficulty": "medium",
+      "scenario_type": "routing",
       "top_k": 5,
-      "score_threshold": 0.95
+      "score_threshold": 0.1
+    },
+    {
+      "name": "conflict_requires_uncertainty",
+      "question": "信用账户融资融券 EVAL_CREDIT_POLICY_V1 EVAL_CONFLICT_POLICY_NO_V1",
+      "expected_document_keys": ["credit_policy", "conflict_policy_no"],
+      "expected_chunk_indices": [0],
+      "expected_abstain": false,
+      "citation_constraints": {
+        "min_count": 1,
+        "require_resolved_chunk": true
+      },
+      "tags": ["conflict", "iterative_retrieval", "rerank_filter"],
+      "difficulty": "medium",
+      "scenario_type": "conflict",
+      "top_k": 6,
+      "score_threshold": 0.1
     },
     {
       "name": "unknown_abstain",
@@ -56,7 +93,7 @@
         "min_count": 0,
         "require_resolved_chunk": true
       },
-      "tags": ["abstain", "out_of_scope"],
+      "tags": ["retrieval", "iterative_retrieval", "abstain"],
       "difficulty": "easy",
       "scenario_type": "abstain",
       "top_k": 5,

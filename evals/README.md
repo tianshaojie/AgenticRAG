@@ -2,7 +2,7 @@
 
 This directory stores CI-friendly evaluation and demo data.
 
-- `golden/golden_v1.json`: default regression dataset used by `make eval`
+- `golden/golden_v1.json`: default regression dataset used by `make eval` (covers 5 Agentic core actions)
 - `golden/golden_minimal.json`: minimal local smoke dataset
 - `demo_documents/`: minimal txt/markdown files for manual upload/index/chat flow
 - `cases/`: reserved for custom case templates

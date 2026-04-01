@@ -33,7 +33,7 @@ from app.reranker.interfaces import RerankRequest, RerankerCandidate
 from app.retrieval.repository import RetrievalRepository
 from app.retrieval.reranker_factory import build_reranker
 from app.retrieval.service import PgVectorRetriever
-from app.schemas.chat import ChatQueryRequest, ChatQueryResponse
+from app.schemas.chat import ChatQueryRequest, ChatQueryResponse, UncertaintySignal
 from app.schemas.common import Citation, CitationSpan, HealthCheck, HealthResponse, ReadyResponse, RequestMetadata
 from app.schemas.documents import DocumentIndexRequest, DocumentIndexResponse, DocumentListResponse, DocumentRead
 from app.schemas.evals import EvalResultRead, EvalRunRequest, EvalRunResponse, FailedEvalCase
@@ -579,7 +579,7 @@ async def query_chat(
     )
 
     try:
-        session, message, retrieved, answer, _trace_id = await service.ask(
+        session, message, retrieved, answer, trace_db_id = await service.ask(
             session_id=payload.session_id,
             query=payload.query,
             top_k=payload.top_k,
@@ -613,6 +613,24 @@ async def query_chat(
         for item in retrieved
     ]
 
+    trace = db.get(AgentTrace, trace_db_id)
+    trace_meta = trace.meta if trace is not None else {}
+    conflict_chunk_ids: list[UUID] = []
+    for value in trace_meta.get("conflict_chunk_ids") or []:
+        try:
+            conflict_chunk_ids.append(UUID(str(value)))
+        except (TypeError, ValueError):
+            continue
+    is_uncertain = bool(trace_meta.get("conflict")) or answer.reason == "evidence_conflict"
+    uncertainty = None
+    if is_uncertain:
+        uncertainty = UncertaintySignal(
+            is_uncertain=True,
+            reason=answer.reason or "evidence_conflict",
+            conflict_type=trace_meta.get("conflict_type"),
+            conflict_chunk_ids=conflict_chunk_ids,
+        )
+
     return ChatQueryResponse(
         session_id=session.id,
         message_id=message.id,
@@ -621,6 +639,7 @@ async def query_chat(
         retrieval_results=retrieval_results,
         abstained=answer.abstained,
         reason=answer.reason,
+        uncertainty=uncertainty,
         created_at=message.created_at,
     )
 

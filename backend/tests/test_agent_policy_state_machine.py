@@ -8,8 +8,9 @@ from app.agent.state_machine import AgentState, validate_transition
     ("current", "context", "expected"),
     [
         (AgentState.INIT, {}, AgentState.ANALYZE_QUERY),
-        (AgentState.ANALYZE_QUERY, {"need_retrieval": True}, AgentState.RETRIEVE),
+        (AgentState.ANALYZE_QUERY, {"need_retrieval": True}, AgentState.ROUTE),
         (AgentState.ANALYZE_QUERY, {"need_retrieval": False}, AgentState.ABSTAIN),
+        (AgentState.ROUTE, {"route_failed": False}, AgentState.RETRIEVE),
         (AgentState.RETRIEVE, {"retrieval_failed": False}, AgentState.EVALUATE_EVIDENCE),
         (
             AgentState.RETRIEVE,
@@ -24,12 +25,20 @@ from app.agent.state_machine import AgentState, validate_transition
         ),
         (
             AgentState.EVALUATE_EVIDENCE,
+            {"evidence_sufficient": False, "can_rewrite": True, "retrieval_stagnated": True},
+            AgentState.ABSTAIN,
+        ),
+        (
+            AgentState.EVALUATE_EVIDENCE,
             {"evidence_sufficient": False, "can_rewrite": False},
             AgentState.ABSTAIN,
         ),
         (AgentState.REWRITE_QUERY, {"rewrite_failed": False}, AgentState.RETRIEVE),
         (AgentState.RERANK, {"rerank_failed": False}, AgentState.GENERATE_ANSWER),
-        (AgentState.GENERATE_ANSWER, {"generation_failed": False}, AgentState.COMPLETE),
+        (AgentState.RERANK, {"rerank_empty": True}, AgentState.ABSTAIN),
+        (AgentState.GENERATE_ANSWER, {"generation_failed": False}, AgentState.CRITIQUE),
+        (AgentState.CRITIQUE, {"critique_requires_abstain": False}, AgentState.COMPLETE),
+        (AgentState.CRITIQUE, {"critique_requires_abstain": True}, AgentState.ABSTAIN),
     ],
 )
 def test_default_policy_transitions(current: AgentState, context: dict, expected: AgentState) -> None:

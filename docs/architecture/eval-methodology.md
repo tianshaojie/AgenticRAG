@@ -48,6 +48,15 @@ Golden dataset is JSON file based and contains:
 - `step_limit_violations`
 - `rewrite_limit_violations`
 - `fallback_visibility_failures`
+- `agentic_capability_failures` (tag-driven checks)
+
+4. Agentic capability checks (tag-driven):
+- `query_analysis`: analysis step payload completeness
+- `routing`: route decision payload completeness
+- `route_fallback`: fallback visibility in route step
+- `iterative_retrieval`: retrieval step stagnation metrics visibility
+- `rerank_filter`: rerank/filter payload completeness
+- `conflict`: uncertainty signal + conflict reason consistency
 
 ## Gate Failure Conditions
 
@@ -58,6 +67,7 @@ Run fails when any condition is true:
 3. Citation integrity failures > 0.
 4. Agent step/rewrite limit violations > 0.
 5. Fallback visibility failures > 0.
+6. Any `agentic_*` capability regression detected.
 
 ## Storage
 

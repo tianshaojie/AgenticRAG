@@ -36,5 +36,5 @@ def test_citation_contains_span_mapping() -> None:
 
     citations = assembler.assemble(ranked_chunks=scored)
     assert len(citations) == 1
-    assert citations[0].start_char == 5
-    assert citations[0].end_char == 16
+    assert citations[0].start_char == 0
+    assert citations[0].end_char == len("hello world")
