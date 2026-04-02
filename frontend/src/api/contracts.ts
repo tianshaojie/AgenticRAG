@@ -62,6 +62,13 @@ export interface ChatQueryRequest {
   embedding_model?: string;
 }
 
+export interface UncertaintySignalDto {
+  is_uncertain: boolean;
+  reason: string;
+  conflict_type?: string | null;
+  conflict_chunk_ids: UUID[];
+}
+
 export interface ChatQueryResponse {
   session_id: UUID;
   message_id: UUID;
@@ -70,6 +77,7 @@ export interface ChatQueryResponse {
   retrieval_results: RetrievalResultDto[];
   abstained: boolean;
   reason?: string | null;
+  uncertainty?: UncertaintySignalDto | null;
   created_at: string;
 }
 

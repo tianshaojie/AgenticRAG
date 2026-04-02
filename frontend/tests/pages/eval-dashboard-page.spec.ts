@@ -59,7 +59,8 @@ describe('EvalDashboardPage', () => {
     expect(apiClient.getLatestEvalResult).toHaveBeenCalledTimes(1);
     expect(wrapper.text()).toContain('latest-run');
     expect(wrapper.text()).toContain('Gate Passed');
-    expect(wrapper.text()).toContain('recall@k');
+    expect(wrapper.text()).toContain('Recall@K');
+    expect(wrapper.text()).toContain('Unsupported Answer Rate');
   });
 
   it('runs eval and reloads result', async () => {

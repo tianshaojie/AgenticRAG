@@ -44,4 +44,22 @@ describe('AnswerCard', () => {
     expect(wrapper.text()).toContain('Abstained');
     expect(wrapper.text()).toContain('insufficient_citation_count');
   });
+
+  it('renders uncertain status when conflict is detected', () => {
+    const wrapper = mount(AnswerCard, {
+      props: {
+        response: buildResponse({
+          uncertainty: {
+            is_uncertain: true,
+            reason: 'conflicting_evidence',
+            conflict_type: 'cross_document_conflict',
+            conflict_chunk_ids: ['chunk-a', 'chunk-b'],
+          },
+        }),
+      },
+    });
+
+    expect(wrapper.text()).toContain('Uncertain');
+    expect(wrapper.get('[data-testid="answer-uncertainty"]').text()).toContain('conflicting_evidence');
+  });
 });

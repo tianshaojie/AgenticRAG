@@ -73,10 +73,18 @@ describe('SettingsHealthPage', () => {
     const wrapper = mount(SettingsHealthPage);
     await flushPromises();
 
-    expect(wrapper.text()).toContain('Frontend Config Summary');
-    expect(wrapper.text()).toContain('LLM / Reranker Provider Settings');
+    expect(wrapper.text()).toContain('Provider Runtime Settings');
     expect(wrapper.text()).toContain('Enable real LLM provider');
     expect(wrapper.text()).toContain('Enable real reranker provider');
+
+    const healthTab = wrapper
+      .findAll('button')
+      .find((node) => node.text().includes('System Health & Readiness'));
+    expect(healthTab).toBeDefined();
+    await healthTab?.trigger('click');
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('Frontend Config Summary');
     expect(wrapper.text()).toContain('/health');
     expect(wrapper.text()).toContain('/ready');
     expect(wrapper.text()).toContain('PostgreSQL');

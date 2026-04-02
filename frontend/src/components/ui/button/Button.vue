@@ -21,9 +21,9 @@ const classes = computed(() => {
 
   const variantMap: Record<string, string> = {
     default: 'bg-primary text-primary-foreground hover:opacity-90',
-    outline: 'border border-border bg-white text-slate-800 hover:bg-slate-50',
-    destructive: 'bg-rose-600 text-white hover:bg-rose-500',
-    ghost: 'bg-transparent text-slate-700 hover:bg-slate-100',
+    outline: 'border border-border bg-white text-app-text hover:bg-muted',
+    destructive: 'bg-danger text-danger-foreground hover:opacity-90',
+    ghost: 'bg-transparent text-app-text-muted hover:bg-muted hover:text-app-text',
   };
 
   const sizeMap: Record<string, string> = {

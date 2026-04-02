@@ -57,4 +57,54 @@ describe('AgentTracePanel', () => {
     expect(wrapper.text()).toContain('final_decision: abstain');
     expect(wrapper.text()).toContain('latency_total_ms: 55');
   });
+
+  it('filters timeline by fallback flag', async () => {
+    const wrapper = mount(AgentTracePanel, {
+      props: {
+        trace: {
+          trace_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+          session_id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+          status: 'success',
+          start_state: 'INIT',
+          end_state: 'COMPLETE',
+          started_at: '2026-03-31T01:00:00Z',
+          finished_at: '2026-03-31T01:00:02Z',
+          steps: [
+            {
+              step_order: 1,
+              state: 'RETRIEVE',
+              action: 'retrieve_chunks',
+              status: 'success',
+              input_payload: {},
+              output_payload: {},
+              input_summary: 'retrieve',
+              output_summary: 'ok',
+              fallback: false,
+              latency_ms: 20,
+              error_message: null,
+              created_at: '2026-03-31T01:00:00Z',
+            },
+            {
+              step_order: 2,
+              state: 'RERANK',
+              action: 'rerank',
+              status: 'warning',
+              input_payload: {},
+              output_payload: {},
+              input_summary: 'rerank',
+              output_summary: 'fallback',
+              fallback: true,
+              latency_ms: 10,
+              error_message: null,
+              created_at: '2026-03-31T01:00:01Z',
+            },
+          ],
+        },
+      },
+    });
+
+    await wrapper.find('input[type="checkbox"]').setValue(true);
+    expect(wrapper.text()).toContain('#2 RERANK');
+    expect(wrapper.text()).not.toContain('#1 RETRIEVE');
+  });
 });

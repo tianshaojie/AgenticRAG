@@ -44,6 +44,7 @@ describe('DocumentManagementPage', () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain('Policy');
+    expect(wrapper.text()).toContain('Failed Indexing Summary');
     expect(wrapper.text()).toContain('Retry');
 
     await wrapper.get('[data-testid="retry-index-11111111-1111-1111-1111-111111111111"]').trigger('click');

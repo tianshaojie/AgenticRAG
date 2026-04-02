@@ -41,12 +41,12 @@ function onSubmit() {
 </script>
 
 <template>
-  <section class="rounded-lg border border-border bg-white p-4 shadow-sm">
-    <h3 class="text-sm font-semibold text-slate-900">Ask a Question</h3>
+  <section class="rounded-lg border border-border bg-card p-4 shadow-soft">
+    <h3 class="text-sm font-semibold text-app-text">Ask a Question</h3>
 
     <div class="mt-3 space-y-3">
       <label class="space-y-1">
-        <span class="text-xs text-slate-600">Query</span>
+        <span class="text-xs text-app-text-muted">Query</span>
         <Textarea
           data-testid="chat-query-input"
           v-model="query"
@@ -56,18 +56,18 @@ function onSubmit() {
 
       <div class="grid gap-3 md:grid-cols-2">
         <label class="space-y-1">
-          <span class="text-xs text-slate-600">Top K</span>
+          <span class="text-xs text-app-text-muted">Top K</span>
           <Input v-model.number="topK" min="1" max="50" step="1" type="number" />
         </label>
 
         <label class="space-y-1">
-          <span class="text-xs text-slate-600">Score Threshold</span>
+          <span class="text-xs text-app-text-muted">Score Threshold</span>
           <Input v-model.number="scoreThreshold" min="0" max="1" step="0.01" type="number" />
         </label>
       </div>
     </div>
 
-    <p v-if="localError" class="mt-3 text-sm text-rose-600">{{ localError }}</p>
+    <p v-if="localError" class="mt-3 text-sm text-danger">{{ localError }}</p>
 
     <div class="mt-4">
       <Button data-testid="chat-submit-button" :disabled="props.loading" @click="onSubmit">

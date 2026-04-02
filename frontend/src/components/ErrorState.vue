@@ -6,8 +6,8 @@ defineProps<{
 </script>
 
 <template>
-  <div class="rounded-lg border border-rose-200 bg-rose-50 p-4">
-    <p class="text-sm font-semibold text-rose-700">{{ title ?? 'Request failed' }}</p>
-    <p class="mt-1 text-sm text-rose-600">{{ message }}</p>
+  <div class="rounded-lg border border-danger/25 bg-danger/10 p-4">
+    <p class="text-sm font-semibold text-danger">{{ title ?? 'Request failed' }}</p>
+    <p class="mt-1 text-sm text-danger/90">{{ message }}</p>
   </div>
 </template>

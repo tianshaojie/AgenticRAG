@@ -10,11 +10,36 @@ const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/', redirect: '/documents' },
-    { path: '/documents', component: DocumentManagementPage },
-    { path: '/chat', component: ChatPage },
-    { path: '/traces', component: AgentTracePage },
-    { path: '/evals', component: EvalDashboardPage },
-    { path: '/settings', component: SettingsHealthPage },
+    {
+      path: '/documents',
+      name: 'documents',
+      component: DocumentManagementPage,
+      meta: { title: 'Documents', breadcrumbs: ['Workspace', 'Documents'] },
+    },
+    {
+      path: '/chat',
+      name: 'chat',
+      component: ChatPage,
+      meta: { title: 'Chat', breadcrumbs: ['Workspace', 'Chat'] },
+    },
+    {
+      path: '/traces',
+      name: 'traces',
+      component: AgentTracePage,
+      meta: { title: 'Traces', breadcrumbs: ['Observability', 'Traces'] },
+    },
+    {
+      path: '/evals',
+      name: 'evals',
+      component: EvalDashboardPage,
+      meta: { title: 'Evals', breadcrumbs: ['Observability', 'Evals'] },
+    },
+    {
+      path: '/settings',
+      name: 'settings',
+      component: SettingsHealthPage,
+      meta: { title: 'Settings', breadcrumbs: ['System', 'Settings'] },
+    },
   ],
 });
 

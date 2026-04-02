@@ -4,6 +4,16 @@ import { describe, expect, it, vi } from 'vitest';
 import ChatPage from '../../src/pages/ChatPage.vue';
 import { apiClient } from '../../src/api/client';
 
+vi.mock('vue-router', async () => {
+  const actual = await vi.importActual<typeof import('vue-router')>('vue-router');
+  return {
+    ...actual,
+    useRouter: () => ({
+      push: vi.fn(),
+    }),
+  };
+});
+
 vi.mock('../../src/api/client', () => ({
   apiClient: {
     chatQuery: vi.fn(),
@@ -53,6 +63,8 @@ describe('ChatPage', () => {
     expect(apiClient.chatQuery).toHaveBeenCalledTimes(1);
     expect(wrapper.text()).toContain('Based on evidence');
     expect(wrapper.text()).toContain('quoted text');
+    expect(wrapper.text()).toContain('Recent Sessions');
+    expect(wrapper.text()).toContain('#11111111');
     expect(wrapper.get('[data-testid="evidence-detail"]').text()).toContain('retrieval preview');
   });
 

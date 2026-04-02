@@ -68,32 +68,32 @@ function onSubmit() {
 </script>
 
 <template>
-  <section class="rounded-lg border border-border bg-white p-4 shadow-sm">
-    <h3 class="text-sm font-semibold text-slate-900">Upload Document</h3>
+  <section class="rounded-lg border border-border bg-card p-4 shadow-soft">
+    <h3 class="text-sm font-semibold text-app-text">Upload Document</h3>
 
     <div class="mt-3 grid gap-3 md:grid-cols-2">
       <label class="space-y-1">
-        <span class="text-xs text-slate-600">Title</span>
+        <span class="text-xs text-app-text-muted">Title</span>
         <Input v-model="title" placeholder="Document title" />
       </label>
 
       <label class="space-y-1">
-        <span class="text-xs text-slate-600">Source (optional)</span>
+        <span class="text-xs text-app-text-muted">Source (optional)</span>
         <Input v-model="source" placeholder="policy-wiki" />
       </label>
 
       <label class="space-y-1">
-        <span class="text-xs text-slate-600">Tags (optional, comma-separated)</span>
+        <span class="text-xs text-app-text-muted">Tags (optional, comma-separated)</span>
         <Input v-model="tags" placeholder="ops, runbook" />
       </label>
 
       <label class="space-y-1">
-        <span class="text-xs text-slate-600">File (.txt/.md)</span>
+        <span class="text-xs text-app-text-muted">File (.txt/.md)</span>
         <Input accept=".txt,.md,text/plain,text/markdown" type="file" @change="onFileChange" />
       </label>
     </div>
 
-    <p v-if="localError" class="mt-3 text-sm text-rose-600">{{ localError }}</p>
+    <p v-if="localError" class="mt-3 text-sm text-danger">{{ localError }}</p>
 
     <div class="mt-4">
       <Button :disabled="props.loading" @click="onSubmit">
